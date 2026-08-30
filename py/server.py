@@ -82,6 +82,27 @@ def _job_new(kind: str, total: int) -> str:
     return jid
 
 
+def _job_cancel(jid: str) -> bool:
+    """중지 요청. 작업 스레드를 강제로 죽이지 않고 협조적으로 멈춘다.
+
+    강제 종료는 SQLite 쓰기 도중에 끊길 수 있어 상태가 깨진다.
+    대신 루프가 매 건 시작 전에 플래그를 보고, 남은 대상은 표준값으로 채운 뒤 끝낸다.
+    """
+    with _JOB_LOCK:
+        j = _JOBS.get(jid)
+        if not j or j.get("status") != "running":
+            return False
+        j["cancel"] = True
+        j["status"] = "cancelling"
+    L.log("warn", "job", f"{jid} 중지 요청 — 남은 건은 표준값으로 채웁니다")
+    return True
+
+
+def _job_cancelled(jid: str) -> bool:
+    with _JOB_LOCK:
+        return bool(_JOBS.get(jid, {}).get("cancel"))
+
+
 def _job_set(jid: str, **kw):
     with _JOB_LOCK:
         if jid in _JOBS:
@@ -109,7 +130,7 @@ def _job_run(jid: str, fn):
     def wrap():
         try:
             fn(jid)
-            _job_set(jid, status="done", current="")
+            _job_set(jid, status="cancelled" if _job_cancelled(jid) else "done", current="")
         except Exception as e:
             L.log("error", "job", f"{jid} 실패 — {e}")
             _job_set(jid, status="failed", error=f"{type(e).__name__}: {e}")
@@ -176,12 +197,63 @@ def _run_npm(args: list[str]) -> str:
         return str(e)
 
 
+def _fill_sector_messages(job_id, rest, sel, channel, persona_id, mode="1:1"):
+    """중지된 생성 작업의 남은 대상을 업종 기본 문안으로 채운다.
+
+    중지를 눌렀다고 그 대상들이 빈손이면 6·7단계에서 통째로 사라진다.
+    "중지 = 여기서부터는 표준 문안으로 간다" 가 되도록 채워 두고,
+    kind='sector' 로 표시해 검토 화면에서 AI 생성분과 갈라 보이게 한다.
+    """
+    p = persona_of(persona_id)
+    cur = store.load()
+    filled = 0
+    if mode == "1:N":
+        tpls = dict(cur.get("templates") or {})
+        for sid in rest:
+            seg = seg_of(sid)
+            if not seg:
+                continue
+            tpl = generate.apply_compliance(SF.template_for(seg, p, COMPANY), channel, persona_id)
+            tpl["kind"] = "sector"
+            tpl["fallbackFrom"] = "사용자가 생성을 중지함"
+            tpls[sid] = tpl
+            for c in cur["cards"]:
+                if c["id"] in sel and c.get("segmentId") == sid:
+                    c["message"] = generate.render_template(tpl, c, channel)
+                    c["message"]["kind"] = "sector"
+                    c["message"]["fallbackFrom"] = "사용자가 생성을 중지함"
+                    c["message"].setdefault("reviewStatus", "PENDING")
+                    c["status"] = "DRAFTED"
+                    filled += 1
+        cur["templates"] = tpls
+    else:
+        for r in rest:
+            seg = seg_of(r.get("segmentId"))
+            c = _card(cur, r["id"])
+            if not seg or c is None or c.get("message"):
+                continue
+            tpl = generate.apply_compliance(SF.template_for(seg, p, COMPANY), channel, persona_id)
+            c["message"] = generate.render_template(tpl, c, channel)
+            c["message"]["kind"] = "sector"
+            c["message"]["fallbackFrom"] = "사용자가 생성을 중지함"
+            c["message"]["reviewStatus"] = "PENDING"
+            c["status"] = "DRAFTED"
+            filled += 1
+    cur["step"] = 5
+    store.save(cur)
+    _job_set(job_id, current=f"중지됨 — 남은 {filled}건은 업종 기본 문안으로 채웠습니다")
+    L.log("warn", "generate", f"중지 — {filled}건 업종 기본 문안 대체")
+
+
 # ── 라우트 ────────────────────────────────────────────────────────────
 def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
     """(status, payload) 를 돌려준다. payload 가 dict 면 JSON 으로 나간다."""
 
     if path == "/api/state":
         return 200, full_state(store.load())
+
+    if path == "/api/job-cancel" and method == "POST":
+        return 200, {"ok": _job_cancel(body.get("id") or ""), "job": _job_get(body.get("id") or "")}
 
     if path == "/api/logs":
         return 200, L.since(int((query.get("since") or ["0"])[0] or 0))
@@ -314,6 +386,11 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
             # 회사명 기준으로 한 번만 찾아 나머지 장에 그대로 나눠 준다.
             done_by_company: dict[str, dict] = {}
             for i, t in enumerate(targets):
+                if _job_cancelled(job_id):
+                    _job_set(job_id, done=len(targets),
+                             current=f"중지됨 — {i}건까지 처리")
+                    L.log("warn", "resolve", f"중지 — {i}/{len(targets)}건까지 처리")
+                    return
                 _job_set(job_id, current=t.get("company") or t.get("name"), done=i)
                 cur = store.load()
                 c = _card(cur, t["id"])
@@ -407,11 +484,15 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
 
     # --- 3. 리서치 --------------------------------------------------------
     if path == "/api/enrich" and method == "POST":
+        # AI 가 없어도 멈추지 않는다. 여기서 400 을 돌려주면 4~7단계가 통째로 안 열려
+        # "AI 가 잠깐 죽으면 오늘 캠페인을 못 돈다"가 된다.
+        # 대신 홈페이지는 그대로 읽고, 사실 추출만 업종 표준값으로 대체한다.
+        # 대체분은 kind='sector' 로 표시돼 화면·검토에서 확인된 사실과 갈라 보인다.
         b = llm.resolve_backend(refresh=True)
-        if b["name"] == "none":
-            L.log("error", "enrich", f"리서치 불가 — {b.get('hint')}")
-            return 400, {"error": "AI 백엔드가 없어 리서치를 할 수 없습니다.\n"
-                                  + str(b.get("hint", ""))}
+        no_ai = b["name"] == "none"
+        if no_ai:
+            L.log("warn", "enrich",
+                  f"AI 없이 진행 — 업종 표준값으로 대체합니다. ({b.get('hint', '')})")
 
         st = store.load()
         ids = body.get("ids") or []
@@ -430,6 +511,23 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
             seen_site: dict[str, dict] = {}
             seen_signals: dict[tuple, dict] = {}
             for i, t in enumerate(targets):
+                if _job_cancelled(job_id):
+                    # 사람이 중지를 눌렀다. 여기서 그냥 멈추면 남은 대상은 근거가 없어
+                    # 5단계에서 통째로 빠진다. 표준값으로 채워 7단계까지 갈 수 있게 둔다.
+                    rest = targets[i:]
+                    cur = store.load()
+                    for r in rest:
+                        c = _card(cur, r["id"])
+                        if c is None or (c.get("signals") or {}).get("facts"):
+                            continue
+                        c["signals"] = SF.signals_for(r.get("segmentId"), "사용자가 리서치를 중지함")
+                        c["status"] = "ENRICHED"
+                    cur["step"] = 3
+                    store.save(cur)
+                    _job_set(job_id, done=len(targets),
+                             current=f"중지됨 — 남은 {len(rest)}건은 업종 표준값으로 채웠습니다")
+                    L.log("warn", "enrich", f"중지 — 남은 {len(rest)}건 표준값 대체")
+                    return
                 _job_set(job_id, current=t.get("company") or t.get("name"), done=i)
                 url_key = (t.get("siteUrl") or "").strip().lower()
                 if url_key and url_key in seen_site:
@@ -467,7 +565,10 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
                     continue
 
                 sig_key = (url_key, t.get("segmentId"))
-                if url_key and sig_key in seen_signals:
+                if no_ai:
+                    # AI 가 아예 없으면 72번 호출해 72번 실패시킬 이유가 없다.
+                    signals = SF.signals_for(t.get("segmentId"), "AI 백엔드 없음")
+                elif url_key and sig_key in seen_signals:
                     signals = seen_signals[sig_key]        # 같은 회사 = 같은 근거
                 else:
                     try:
@@ -798,6 +899,10 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
             if mode == "1:N":
                 seg_ids = [x for x in dict.fromkeys(c.get("segmentId") for c in targets) if x]
                 for i, sid in enumerate(seg_ids):
+                    if _job_cancelled(job_id):
+                        _fill_sector_messages(job_id, seg_ids[i:], sel, channel,
+                                              common.get("persona_id"), mode="1:N")
+                        return
                     _job_set(job_id, current=f"고객군 {sid}", done=i)
                     L.log("info", "generate", f"1:N 공통 문안 생성 — {sid}")
                     try:
@@ -831,6 +936,10 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
                 return
 
             for i, t in enumerate(targets):
+                if _job_cancelled(job_id):
+                    _fill_sector_messages(job_id, targets[i:], sel, channel,
+                                          common.get("persona_id"), mode="1:1")
+                    return
                 _job_set(job_id, current=f"{t.get('name')} · {t.get('company')}", done=i)
                 L.log("info", "generate", f"1:1 문안 생성 — {t.get('name')} · {t.get('company')}")
                 try:

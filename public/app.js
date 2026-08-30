@@ -393,7 +393,7 @@ function draw(loading) {
       <div class="desc">메일 계정, AI 키, 발송 안전장치를 여기서 직접 고칩니다.
         각 항목이 업무상 무엇을 바꾸는지 함께 적어 두었습니다.</div>`;
     $('#todo').innerHTML = loading
-      ? `<div class="todo"><div class="t">진행 중</div><div class="spin" style="margin-top:8px">${esc(loading)}</div></div>` : '';
+      ? `<div class="todo"><div class="t">진행 중</div><div class="spin" style="margin-top:8px">${esc(loading)}</div>${runningJob ? `<div class="row" style="margin-top:12px"><button class="bad sm" data-jobstop="${esc(runningJob.id)}" title="지금 하던 것까지만 저장하고 멈춥니다. 남은 대상은 업종 표준값으로 채워져 다음 단계로 그대로 넘어갑니다.">■ 중지하고 표준값으로 계속</button><span class="muted" style="font-size:11.5px">중지해도 4~7단계는 정상 진행됩니다</span></div>` : ""}</div>` : '';
     $('#view').innerHTML = settingsView();
     bind();
     // 처음 들어왔을 때만 불러온다. 불러온 뒤 한 번 더 그린다.
@@ -407,7 +407,7 @@ function draw(loading) {
       <h2>7단계를 한 화면에</h2>
       <div class="desc">명함 수집부터 발송까지 전부 펼쳐 놓았습니다. 위에서부터 순서대로 내려가시면 됩니다.</div>`;
     $('#todo').innerHTML = loading
-      ? `<div class="todo"><div class="t">진행 중</div><div class="spin" style="margin-top:8px">${esc(loading)}</div></div>` : '';
+      ? `<div class="todo"><div class="t">진행 중</div><div class="spin" style="margin-top:8px">${esc(loading)}</div>${runningJob ? `<div class="row" style="margin-top:12px"><button class="bad sm" data-jobstop="${esc(runningJob.id)}" title="지금 하던 것까지만 저장하고 멈춥니다. 남은 대상은 업종 표준값으로 채워져 다음 단계로 그대로 넘어갑니다.">■ 중지하고 표준값으로 계속</button><span class="muted" style="font-size:11.5px">중지해도 4~7단계는 정상 진행됩니다</span></div>` : ""}</div>` : '';
     $('#view').innerHTML = steps.map(s => {
       const t = todoFor(s.n, x) ?? { t: '', m: s.label, s: '' };
       return `
@@ -433,7 +433,7 @@ function draw(loading) {
 
   const t = todoFor(step.n, x) ?? { t: '', m: step.label, s: '' };
   $('#todo').innerHTML = loading
-    ? `<div class="todo"><div class="t">진행 중</div><div class="spin" style="margin-top:8px">${esc(loading)}</div></div>`
+    ? `<div class="todo"><div class="t">진행 중</div><div class="spin" style="margin-top:8px">${esc(loading)}</div>${runningJob ? `<div class="row" style="margin-top:12px"><button class="bad sm" data-jobstop="${esc(runningJob.id)}" title="지금 하던 것까지만 저장하고 멈춥니다. 남은 대상은 업종 표준값으로 채워져 다음 단계로 그대로 넘어갑니다.">■ 중지하고 표준값으로 계속</button><span class="muted" style="font-size:11.5px">중지해도 4~7단계는 정상 진행됩니다</span></div>` : ""}</div>`
     : `<div class="todo ${t.blocked ? 'blocked' : ''} ${t.done ? 'done' : ''}">
         <div class="t">${esc(t.t)}</div><div class="m">${esc(t.m)}</div><div class="s">${esc(t.s)}</div>
         ${PRIMARY[step.id] ? PRIMARY[step.id](x) : ''}</div>`;
@@ -553,6 +553,15 @@ const LEGEND = `<div class="muted" style="font-size:11px;margin-bottom:9px;displ
    똑같이 "아직 안 읽음"으로 보였다. 원인이 다르면 할 일도 다르다. */
 function factsCell(c) {
   const s = c.signals ?? null;
+  // 업종 기본값이 먼저다. facts 검사보다 앞에 둬야 한다.
+  // 뒤에 두면 대체값이 "홈페이지에서 확인한 사실"로 표시돼, 그 회사에서 확인하지도 않은
+  // 문장이 근거처럼 보이고 그대로 메일에 인용된다 — 이 도구가 가장 피해야 할 사고다.
+  if (s?.kind === 'sector') {
+    return `<span class="tag warn" title="${esc(s.note ?? '홈페이지에서 사실을 확보하지 못해 업종 일반 특성으로 대체했습니다.')}">
+        ⚠ 업종 일반론 — 확인된 사실 아님</span>
+      <ul class="facts" style="opacity:.75">${(s.facts ?? []).map(f => `<li>${esc(f)}</li>`).join('')}</ul>
+      <div class="muted" style="font-size:10.5px">이 회사에서 확인한 내용이 아닙니다. STEP 6 검토에서 반드시 확인하세요.</div>`;
+  }
   if (s?.facts?.length) {
     return `${srcTag('ai', '홈페이지에서 AI가 추출')}<ul class="facts">${
       s.facts.map(f => `<li>${esc(f)}</li>`).join('')}</ul>`;
@@ -577,9 +586,113 @@ function factsCell(c) {
     c.siteUrl ? '아직 안 읽음 — STEP 3 에서 리서치를 실행하세요' : '홈페이지 주소가 없습니다'}</span>`;
 }
 
-const cardRows = (cards, { pick = true } = {}) => !cards.length
-  ? '<div class="muted" style="padding:8px 0">명함이 없습니다. 아래에서 추가하거나 STEP 1 에서 가져오세요.</div>'
-  : LEGEND + `<div class="tw"><table><thead><tr>
+/* ── 표 페이징 ────────────────────────────────────────────────────────
+   명함이 수백 건이면 한 페이지에 다 그리는 순간 화면이 끝없이 길어지고,
+   스크롤로 원하는 사람을 찾는 것도 불가능해진다. 표마다 검색·필터·페이지를 둔다.
+   상태는 표 종류(key)별로 따로 기억한다 — STEP 을 오가도 보던 페이지가 유지된다. */
+let focusAfterRender = null;
+let runningJob = null;   // {id, label} — 진행 중 작업. 중지 버튼이 이걸 쓴다.
+const tableState = {};
+const ts = k => (tableState[k] ??= { page: 1, per: 25, q: '', filter: 'all' });
+
+const FILTERS = [
+  { id: 'all', label: '전체' },
+  { id: 'selected', label: '발송 대상' },
+  { id: 'facts', label: '근거 있음' },
+  { id: 'nofacts', label: '근거 없음' },
+  { id: 'nosite', label: '홈페이지 없음' },
+  { id: 'unclassified', label: '미분류' },
+  { id: 'excluded', label: '제외·자사' },
+];
+
+function applyFilter(cards, s) {
+  const q = s.q.trim().toLowerCase();
+  const sel = new Set(S.selection ?? []);
+  return cards.filter(c => {
+    if (q) {
+      const hay = `${c.name ?? ''} ${c.company ?? ''} ${c.email ?? ''} ${c.title ?? ''} ${c.dept ?? ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    const off = c.excluded || c.segmentId === 'internal';
+    switch (s.filter) {
+      case 'selected': return sel.has(c.id);
+      case 'facts': return Boolean(c.signals?.facts?.length);
+      case 'nofacts': return !c.signals?.facts?.length;
+      case 'nosite': return !(c.siteUrl || c.site);
+      case 'unclassified': return !c.segmentId || c.segmentId === 'unclassified';
+      case 'excluded': return off;
+      default: return true;
+    }
+  });
+}
+
+/** 1 2 3 … 페이지 번호. 많아지면 앞뒤 몇 개만 두고 가운데를 접는다. */
+function pageNumbers(cur, last) {
+  if (last <= 7) return Array.from({ length: last }, (_, i) => i + 1);
+  const out = new Set([1, last, cur, cur - 1, cur + 1]);
+  if (cur <= 3) [2, 3, 4].forEach(n => out.add(n));
+  if (cur >= last - 2) [last - 1, last - 2, last - 3].forEach(n => out.add(n));
+  const nums = [...out].filter(n => n >= 1 && n <= last).sort((a, b) => a - b);
+  const withGaps = [];
+  nums.forEach((n, i) => {
+    if (i && n - nums[i - 1] > 1) withGaps.push('…');
+    withGaps.push(n);
+  });
+  return withGaps;
+}
+
+function pager(key, total, s) {
+  const last = Math.max(1, Math.ceil(total / s.per));
+  if (s.page > last) s.page = last;
+  const from = total ? (s.page - 1) * s.per + 1 : 0;
+  const to = Math.min(s.page * s.per, total);
+  return `<div class="row" style="margin-top:12px;justify-content:space-between">
+    <span class="muted" style="font-size:11.5px">${total}건 중 ${from}–${to}</span>
+    <span class="row" style="gap:4px">
+      <button class="ghost xs" data-pg="${key}:${s.page - 1}" ${s.page <= 1 ? 'disabled' : ''}
+        title="이전 페이지">‹</button>
+      ${pageNumbers(s.page, last).map(n => n === '…'
+        ? '<span class="muted" style="padding:0 3px">…</span>'
+        : `<button class="${n === s.page ? '' : 'ghost'} xs" data-pg="${key}:${n}"
+             title="${n}페이지로">${n}</button>`).join('')}
+      <button class="ghost xs" data-pg="${key}:${s.page + 1}" ${s.page >= last ? 'disabled' : ''}
+        title="다음 페이지">›</button>
+    </span>
+  </div>`;
+}
+
+function tableBar(key, s, shown, total) {
+  return `<div class="row" style="margin-bottom:10px;gap:7px">
+    <input class="inp" data-tq="${key}" value="${esc(s.q)}" placeholder="이름·회사·이메일 검색"
+      style="width:220px" title="입력하는 대로 걸러집니다. 페이지는 1로 돌아갑니다.">
+    <select class="inp" data-tf="${key}" title="보고 싶은 명함만 골라 봅니다.">
+      ${FILTERS.map(f => `<option value="${f.id}"${s.filter === f.id ? ' selected' : ''}>${f.label}</option>`).join('')}
+    </select>
+    <select class="inp" data-tp="${key}" title="한 페이지에 보여줄 줄 수입니다.">
+      ${[10, 25, 50, 100].map(n => `<option value="${n}"${s.per === n ? ' selected' : ''}>${n}개씩</option>`).join('')}
+    </select>
+    ${s.q || s.filter !== 'all'
+      ? `<span class="tag seg">${shown}건 걸러짐 / 전체 ${total}건</span>
+         <button class="ghost xs" data-tclear="${key}" title="검색어와 필터를 지웁니다.">해제</button>`
+      : ''}
+  </div>`;
+}
+
+const cardRows = (cards, { pick = true, key = 'cards' } = {}) => {
+  if (!cards.length) {
+    return '<div class="muted" style="padding:8px 0">명함이 없습니다. 아래에서 추가하거나 STEP 1 에서 가져오세요.</div>';
+  }
+  const s = ts(key);
+  const filtered = applyFilter(cards, s);
+  const last = Math.max(1, Math.ceil(filtered.length / s.per));
+  if (s.page > last) s.page = last;
+  const page = filtered.slice((s.page - 1) * s.per, s.page * s.per);
+  return tableBar(key, s, filtered.length, cards.length)
+    + (page.length ? cardTable(page, pick) + pager(key, filtered.length, s)
+      : '<div class="muted" style="padding:10px 0">조건에 맞는 명함이 없습니다.</div>');
+};
+
+const cardTable = (cards, pick) => LEGEND + `<div class="tw"><table><thead><tr>
       ${pick ? '<th style="width:34px"></th>' : ''}
       <th>담당자</th><th style="width:28%">회사 · 홈페이지</th><th>고객군 · 관심사</th><th>리서치 근거</th><th style="width:74px">관리</th>
     </tr></thead><tbody>
@@ -993,7 +1106,7 @@ atom@atom-eng.co.kr"
     <div class="panel">
       <div class="cap">가져온 명함 · 출처 ${S.source === 'remember-export' ? '리멤버' : S.source === 'paste' ? '직접 입력' : '샘플 시드'}
         <button class="ghost xs" data-act="reset" title="${T.reset}">전체 초기화</button></div>
-      ${cardRows(S.cards ?? [], { pick: false })}
+      ${cardRows(S.cards ?? [], { pick: false, key: "ingest" })}
     </div>
     ${addCardForm()}`,
 
@@ -1039,7 +1152,7 @@ atom@atom-eng.co.kr"
       <div class="muted" style="font-size:12px;margin-bottom:11px">
         찾는 순서: 명함의 URL → 이메일 도메인 → 회사명 AI 추정.
         <b>어느 경우든 실제로 접속되는 주소만</b> 채택합니다. 못 찾으면 표에서 직접 입력하세요.</div>
-      ${cardRows(S.cards ?? [], { pick: false })}
+      ${cardRows(S.cards ?? [], { pick: false, key: "resolve" })}
     </div>`,
 
   enrich: x => `
@@ -1064,7 +1177,7 @@ atom@atom-eng.co.kr"
           이 지시문이 이 프로그램의 핵심입니다. 고칠 곳은
           <code>py/domain.py</code>(고객군 정의)와 <code>py/generate.py</code>(글쓰기 규칙)입니다.</div>
       </div>` : ''}
-    <div class="panel">${cardRows(S.cards ?? [], { pick: false })}</div>`,
+    <div class="panel">${cardRows(S.cards ?? [], { pick: false, key: "enrich" })}</div>`,
 
   segment: () => {
     const cards = S.cards ?? [];
@@ -1138,7 +1251,7 @@ atom@atom-eng.co.kr"
         <span style="flex:1"></span>
         <span class="muted" style="font-size:11.5px">고객군은 표에서 직접 바꿀 수 있습니다</span>
       </div>
-      ${cardRows(cards)}
+      ${cardRows(cards, { key: "segment" })}
     </div>`;
   },
 
@@ -1535,6 +1648,53 @@ function bind() {
       render();
     };
   });
+  /* ── 표 페이징·검색·필터 ──────────────────────────────────────
+     서버를 다시 부르지 않는다. 이미 받아 둔 목록을 화면에서만 나눠 보여준다. */
+  document.querySelectorAll('[data-jobstop]').forEach(b => {
+    b.onclick = async () => {
+      b.disabled = true;
+      b.textContent = '중지하는 중…';
+      // 서버는 스레드를 죽이지 않고 플래그만 세운다. 지금 처리 중인 한 건이
+      // 끝나면 남은 대상을 표준값으로 채우고 작업이 'cancelled' 로 끝난다.
+      const r = await api('/api/job-cancel', { id: b.dataset.jobstop });
+      if (!r.ok) toast('이미 끝났거나 중지할 수 없는 작업입니다.', true);
+    };
+  });
+  document.querySelectorAll('[data-pg]').forEach(b => {
+    b.onclick = () => {
+      const [key, n] = b.dataset.pg.split(':');
+      ts(key).page = Math.max(1, Number(n));
+      render();
+      b.closest('.panel')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    };
+  });
+  document.querySelectorAll('[data-tq]').forEach(inp => {
+    inp.oninput = () => {
+      const key = inp.dataset.tq;
+      const s = ts(key);
+      s.q = inp.value;
+      s.page = 1;                       // 걸러낸 뒤에도 5페이지에 머물면 빈 화면이 된다
+      focusAfterRender = `[data-tq="${key}"]`;
+      render();
+    };
+  });
+  document.querySelectorAll('[data-tf]').forEach(sel => {
+    sel.onchange = () => { const s = ts(sel.dataset.tf); s.filter = sel.value; s.page = 1; render(); };
+  });
+  document.querySelectorAll('[data-tp]').forEach(sel => {
+    sel.onchange = () => { const s = ts(sel.dataset.tp); s.per = Number(sel.value); s.page = 1; render(); };
+  });
+  document.querySelectorAll('[data-tclear]').forEach(b => {
+    b.onclick = () => { Object.assign(ts(b.dataset.tclear), { q: '', filter: 'all', page: 1 }); render(); };
+  });
+
+  // 검색창은 매 글자마다 화면을 다시 그리므로 포커스와 커서를 되돌려 놔야 한다.
+  if (focusAfterRender) {
+    const el = document.querySelector(focusAfterRender);
+    focusAfterRender = null;
+    if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+  }
+
   document.querySelectorAll('[data-seg]').forEach(sel => {
     sel.onchange = async () => {
       adopt(await api('/api/set-segment', { id: sel.dataset.seg, segmentId: sel.value }));
@@ -1755,7 +1915,9 @@ async function runJob(startPath, startBody, label) {
   if (start.error) throw new Error(start.error);
   if (!start.jobId) { adopt(start); return start; }   // 예전 방식(동기) 응답도 받아 준다
 
+  runningJob = { id: start.jobId, label };
   const total = start.total ?? 0;
+  try {
   for (let i = 0; i < 6000; i++) {                    // 최대 약 3시간
     await new Promise(r => setTimeout(r, 1500));
     const j = await (await fetch(`/api/job?id=${encodeURIComponent(start.jobId)}`)).json();
@@ -1763,14 +1925,18 @@ async function runJob(startPath, startBody, label) {
     if (j.status === 'failed') throw new Error(j.error || '작업이 실패했습니다.');
     const done = j.done ?? 0;
     render(`${label} — ${done}/${total || '?'}${j.current ? ` · ${j.current}` : ''}`);
-    if (j.status === 'done') {
+    if (j.status === 'done' || j.status === 'cancelled') {
       adopt(j);
       if (j.failed) log('warn', '작업', `${label} — ${j.failed}건 건너뜀 (기본값으로 대체)`,
                         (j.errors ?? []).slice(0, 3).join(' / '));
+      if (j.status === 'cancelled') {
+        log('warn', '작업', `${label} — 중지됨. 남은 건은 업종 표준값으로 채웠습니다.`, j.current ?? '');
+      }
       return j;
     }
   }
   throw new Error('작업이 너무 오래 걸립니다.');
+  } finally { runningJob = null; }
 }
 
 const SC = {
