@@ -3,12 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "리멤버 명함 데이터 -> 회사 홈페이지 조사 -> 맞춤 광고 메시지 (건축물 안전관리)",
+  "description": "리멤버 명함 → 홈페이지 리서치 → 맞춤 광고 문구 (건축물 안전관리) · 백엔드는 Python(py/)",
   "scripts": {
+    "start": "python -m py.server",
+    "dev": "python -m py.server",
+    "smoke": "python -m py.smoke",
+    "start:node": "node src/server.mjs",
     "login": "node scripts/login.mjs",
     "probe": "node scripts/probe.mjs",
-    "start": "node src/server.mjs",
-    "dev": "node --watch src/server.mjs",
     "export": "node scripts/export-cards.mjs"
   },
   "devDependencies": {

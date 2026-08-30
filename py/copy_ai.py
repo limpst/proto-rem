@@ -214,6 +214,36 @@ def _fallback(card, segment, keywords, count) -> list[dict]:
     return mixed
 
 
+# 과장·단정 표현. 광고 문구에서 이 말이 나가면 그대로 리스크가 된다.
+_HYPE = re.compile(r"최고|최상|완벽|100%|무조건|절대|보장(합니다|해|됩니다)?|1위|유일")
+# 숫자가 든 주장. 아래 화이트리스트에 없는 숫자는 지어낸 것으로 본다.
+_NUM = re.compile(r"\d[\d,.]*\s*(%|퍼센트|건|년|배|개월|만원|억)")
+
+
+def _screen(items: list[dict], allowed: list[str]) -> list[dict]:
+    """생성된 문구를 코드로 한 번 더 거른다.
+
+    프롬프트에 "숫자를 지어내지 마라"라고 써도 모델은 종종 어긴다
+    (실측: "비용 20% 절감 보장", "고객 만족도 95%"). 컴플라이언스에 준하는 항목이라
+    생성 품질에 맡기지 않고 여기서 잘라낸다. 걸린 문구는 버리지 않고 risk 를 달아
+    화면에서 빨간 딱지로 보이게 한다 — 사람이 판단할 여지는 남긴다.
+    """
+    # "1,200건" 과 "1200건" 은 같은 숫자다. 쉼표·공백을 지워 비교한다.
+    norm = lambda s: s.replace(",", "").replace(" ", "")
+    ok_nums = {norm(m.group(0)) for s in allowed for m in _NUM.finditer(s)}
+    for it in items:
+        t = it["text"]
+        risks = []
+        if _HYPE.search(t):
+            risks.append("과장 표현")
+        bad = [m.group(0) for m in _NUM.finditer(t) if norm(m.group(0)) not in ok_nums]
+        if bad:
+            risks.append(f"근거 없는 숫자: {', '.join(bad[:3])}")
+        if risks:
+            it["risk"] = " · ".join(risks)
+    return items
+
+
 def suggest(card: dict | None, segment_id: str | None, keywords: list | None = None,
             tones: list | None = None, channel: str = "email", count: int = 30,
             source_profile: dict | None = None, persona_id: str | None = None) -> dict:
@@ -259,5 +289,8 @@ def suggest(card: dict | None, segment_id: str | None, keywords: list | None = N
         items += _fallback(card, segment, keywords, need)
         src = "rule" if not any(i["source"] == "ai" for i in items) else "mixed"
 
-    L.log("ok", "copy", f"문구 {len(items)}개 생성", {"source": src, "segment": segment_id})
-    return {"items": items[:count], "source": src, "error": err, "prompt": prompt}
+    items = _screen(items[:count], strengths(source_profile))
+    flagged = sum(1 for i in items if i.get("risk"))
+    L.log("ok", "copy", f"문구 {len(items)}개 생성 (검증 경고 {flagged}건)",
+          {"source": src, "segment": segment_id})
+    return {"items": items, "source": src, "error": err, "flagged": flagged, "prompt": prompt}

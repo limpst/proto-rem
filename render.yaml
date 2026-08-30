@@ -1,13 +1,17 @@
 services:
   - type: web
     name: proto-rem
-    runtime: node
+    runtime: python
     plan: free
-    buildCommand: npm install
-    startCommand: npm start
+    # 표준 라이브러리만 쓴다. requirements.txt 는 비어 있어도 Render 가 파이썬으로 인식하게 둔다.
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m py.server
     healthCheckPath: /api/state
     envVars:
-      # 서버에는 Ollama 가 없으므로 Claude API 를 쓴다.
+      - key: PYTHON_VERSION
+        value: "3.12"
+      # 서버에는 Ollama 도 Claude CLI 도 없다. 반드시 claude-api 로 둔다.
+      # (claude-cli 로 두면 "spawn claude ENOENT" 가 난다 — 서버에 CLI 가 없어서다.)
       - key: LLM_BACKEND
         value: claude-api
       # 아래 값들은 Render 대시보드에서 직접 입력한다 (저장소에 두지 않는다).

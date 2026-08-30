@@ -275,6 +275,27 @@ def route(path: str, method: str, body: dict, query: dict):
             st = store.save(st)
         return 200, full_state(st)
 
+    # --- 4-a2. 고객군 수동 지정 --------------------------------------------
+    # AI 는 확신이 없으면 unclassified 로 두도록 설계돼 있다(억지 분류가 엉뚱한 메일이 되므로).
+    # 그래서 사람이 뒤집을 수단이 반드시 있어야 한다. 이 엔드포인트가 그 수단이다.
+    if path == "/api/set-segment" and method == "POST":
+        sid = body.get("segmentId")
+        valid = {s["id"] for s in SEGMENTS} | {"unclassified", "internal"}
+        if sid not in valid:
+            return 400, {"error": f"알 수 없는 고객군입니다: {sid}"}
+
+        def apply(st):
+            c = _card(st, body.get("id"))
+            if not c:
+                return
+            c["segmentId"] = sid
+            c["segmentSource"] = "manual"
+            c["segmentAi"] = None
+            if sid == "internal":
+                st["selection"] = [i for i in st.get("selection", []) if i != c["id"]]
+        L.log("ok", "segment", f"수동 지정 — {body.get('id')} → {sid}")
+        return 200, full_state(store.update(apply))
+
     # --- 4-b. 관심사 추정 --------------------------------------------------
     if path == "/api/interests" and method == "POST":
         st = store.load()
@@ -286,6 +307,46 @@ def route(path: str, method: str, body: dict, query: dict):
         for c in targets:
             c["interests"] = classify_ai.infer_interests(c, c.get("signals"), seg_of(c.get("segmentId")))
         return 200, full_state(store.save(st))
+
+    # --- 명함 CRUD ---------------------------------------------------------
+    if path == "/api/card-add" and method == "POST":
+        made = normalize.to_cards([body.get("card") or {}])
+        if not made:
+            return 400, {"error": "이름이 없습니다. 이름은 반드시 필요합니다."}
+        c = made[0]
+
+        def apply(st):
+            # id 는 기존 목록과 겹치지 않게 새로 준다 (to_cards 는 0번부터 매긴다).
+            used = {x["id"] for x in st["cards"]}
+            n = 0
+            while f"m{n:04d}" in used:
+                n += 1
+            c["id"] = f"m{n:04d}"
+            c["status"] = "NEW"
+            c["segmentId"] = classify(c)["segmentId"]
+            st["cards"].append(c)
+        L.log("ok", "card", f"명함 추가 — {c.get('name')} · {c.get('company')}")
+        return 200, full_state(store.update(apply))
+
+    if path == "/api/card-delete" and method == "POST":
+        cid = body.get("id")
+
+        def apply(st):
+            st["cards"] = [x for x in st["cards"] if x["id"] != cid]
+            st["selection"] = [i for i in st.get("selection", []) if i != cid]
+        L.log("warn", "card", f"명함 삭제 — {cid}")
+        return 200, full_state(store.update(apply))
+
+    if path == "/api/card-update" and method == "POST":
+        def apply(st):
+            c = _card(st, body.get("id"))
+            if not c:
+                return
+            for k in ("name", "title", "company", "dept", "email", "phone", "site", "note"):
+                if body.get(k) is not None:
+                    c[k] = body[k]
+            c["segmentId"] = classify(c)["segmentId"]
+        return 200, full_state(store.update(apply))
 
     # --- 명함 개별 제외 ----------------------------------------------------
     if path == "/api/exclude" and method == "POST":

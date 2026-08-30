@@ -20,6 +20,7 @@ import { sendEmail, smtpStatus } from './deliver.mjs';
 import { toCards } from './normalize.mjs';
 import { resolveSite } from './resolve.mjs';
 import { classifyOne } from './classify-ai.mjs';
+import { upsertCards } from './upsert.mjs';
 import { parseText } from './normalize.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -120,30 +121,79 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/upload-cards' && req.method === 'POST') {
       const body = await readBody(req);
       // 구버전 스니펫이 name/phone 을 객체 그대로 보낼 수 있으므로 서버에서도 정규화한다.
-      const cards = toCards(body.cards ?? []);
-      if (!cards.length) return json(res, 400, { error: '이름이 있는 명함이 없습니다' });
-      // 업로드본을 반출본과 같은 자리에 두어 이후 [명함 불러오기]가 그대로 읽게 한다.
-      fs.mkdirSync(path.join(ROOT, 'data'), { recursive: true });
-      fs.writeFileSync(path.join(ROOT, 'data', 'cards.json'), JSON.stringify(cards, null, 2), 'utf8');
-      return sendState(res, update(st => {
-        st.cards = cards.map(c => ({ ...c, status: 'NEW' }));
-        st.source = 'remember-export';
-        st.selection = [];
-        st.step = 1;
-      }));
+      const incoming = toCards(body.cards ?? []);
+      if (!incoming.length) return json(res, 400, { error: '이름이 있는 명함이 없습니다' });
+
+      const st = load();
+      const r = upsertCards(st.cards ?? [], incoming, { mode: body.mode ?? 'upsert' });
+      st.cards = r.cards;
+      st.source = 'remember-export';
+      save(st);
+      return json(res, 200, {
+        ...load(), upsert: { inserted: r.inserted, updated: r.updated, unchanged: r.unchanged, details: r.details },
+        steps: STEPS, segments: SEGMENTS, company: COMPANY,
+        personas: PERSONAS, backend: await resolveBackend(), smtp: smtpStatus(),
+      });
+    }
+
+    // --- 1-e. CSV 내보내기 ------------------------------------------------
+    // 사내 시스템과 주고받는 표준 인터페이스. 명함·분류·문안·발송결과를 한 장에 담는다.
+    if (p === '/api/export-csv') {
+      const st = load();
+      const cols = ['id', '이름', '직함', '회사', '부서', '이메일', '전화', '홈페이지',
+        '고객군', '분류출처', '제외', '근거수', '근거', '상태',
+        '채널', '모드', '제목', '본문', '검토상태', '검증통과', '발송시각'];
+      const q = v => {
+        const t = String(v ?? '').replace(/
+?
+/g, ' ');
+        return /[",]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+      };
+      const rows = st.cards.map(c => {
+        const m = c.message ?? {};
+        const checks = m.checks ?? [];
+        return [
+          c.id, c.name, c.title, c.company, c.dept, c.email, c.phone, c.siteUrl || c.site,
+          SEGMENTS.find(x => x.id === c.segmentId)?.label ?? c.segmentId ?? '',
+          c.segmentSource ?? '', c.excluded ? 'Y' : '',
+          c.signals?.facts?.length ?? 0, (c.signals?.facts ?? []).join(' | '),
+          c.status ?? '',
+          m.channel ?? '', m.mode ?? '', m.subject ?? '', m.body ?? '',
+          m.reviewStatus ?? '',
+          checks.length ? `${checks.filter(k => k.pass).length}/${checks.length}` : '',
+          c.deliveredAt ?? c.queuedAt ?? '',
+        ].map(q).join(',');
+      });
+      // 엑셀이 UTF-8 을 알아보게 BOM 을 붙인다. 없으면 한글이 깨진다.
+      const csv = '﻿' + [cols.join(','), ...rows].join('
+
+');
+      res.writeHead(200, {
+        'content-type': 'text/csv; charset=utf-8',
+        'content-disposition': `attachment; filename="proto-rem-${new Date().toISOString().slice(0, 10)}.csv"`,
+      });
+      return res.end(csv);
     }
 
     // --- 1. 수집 -------------------------------------------------------
     if (p === '/api/ingest' && req.method === 'POST') {
-      return sendState(res, update(st => {
-        const seed = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'seed-cards.json'), 'utf8'));
-        const exported = path.join(ROOT, 'data', 'cards.json');
-        const hasExport = fs.existsSync(exported);
-        const src = hasExport ? JSON.parse(fs.readFileSync(exported, 'utf8')) : seed;
-        st.cards = src.map(c => ({ ...c, status: 'NEW' }));
-        st.source = hasExport ? 'remember-export' : 'seed-sample';
-        st.step = 1;
-      }));
+      const { mode = 'upsert' } = await readBody(req);
+      const exported = path.join(ROOT, 'data', 'cards.json');
+      const hasExport = fs.existsSync(exported);
+      const src = JSON.parse(fs.readFileSync(
+        hasExport ? exported : path.join(ROOT, 'data', 'seed-cards.json'), 'utf8'));
+
+      const st = load();
+      const r = upsertCards(st.cards ?? [], toCards(src), { mode });
+      st.cards = r.cards;
+      st.source = hasExport ? 'remember-export' : 'seed-sample';
+      st.step = Math.max(st.step ?? 1, 1);
+      save(st);
+      return json(res, 200, {
+        ...load(), upsert: { inserted: r.inserted, updated: r.updated, unchanged: r.unchanged, details: r.details },
+        steps: STEPS, segments: SEGMENTS, company: COMPANY,
+        personas: PERSONAS, backend: await resolveBackend(), smtp: smtpStatus(),
+      });
     }
 
     // --- 2. 발신 설정 + 발송 모드 (HITL) ---------------------------------
@@ -264,19 +314,22 @@ const server = http.createServer(async (req, res) => {
     // --- 1-d. 텍스트로 명함 직접 입력 -------------------------------------
     // 명함이 몇 건뿐일 때 브라우저를 거치는 것보다 이쪽이 훨씬 빠르다.
     if (p === '/api/paste-cards' && req.method === 'POST') {
-      const { text } = await readBody(req);
-      const { cards, mode } = parseText(text);
-      if (!cards.length) {
+      const { text, mode = 'upsert' } = await readBody(req);
+      const { cards: incoming, mode: parsedAs } = parseText(text);
+      if (!incoming.length) {
         return json(res, 400, { error: '명함을 찾지 못했습니다. 이름이 포함된 줄이 있어야 합니다.' });
       }
-      fs.mkdirSync(path.join(ROOT, 'data'), { recursive: true });
-      fs.writeFileSync(path.join(ROOT, 'data', 'cards.json'), JSON.stringify(cards, null, 2), 'utf8');
-      return sendState(res, update(s2 => {
-        s2.cards = cards.map(c => ({ ...c, status: 'NEW', source: 'paste' }));
-        s2.source = 'paste';
-        s2.selection = [];
-        s2.step = 1;
-      }), { parsedAs: mode });
+      const st = load();
+      const r = upsertCards(st.cards ?? [], incoming, { mode });
+      st.cards = r.cards;
+      st.source = 'paste';
+      st.step = Math.max(st.step ?? 1, 1);
+      save(st);
+      return json(res, 200, {
+        ...load(), parsedAs, upsert: { inserted: r.inserted, updated: r.updated, unchanged: r.unchanged, details: r.details },
+        steps: STEPS, segments: SEGMENTS, company: COMPANY,
+        personas: PERSONAS, backend: await resolveBackend(), smtp: smtpStatus(),
+      });
     }
 
     // --- 명함 개별 제외 (본인 프로필 등) ---------------------------------
@@ -374,8 +427,18 @@ const server = http.createServer(async (req, res) => {
       const st = load();
       const approved = st.cards.filter(c => c.message?.reviewStatus === 'APPROVED');
       const results = [];
+      // 화면(STEP 7)이 "같은 사람에게 30일 내 재발송 차단"을 약속한다. 여기서 실제로 막는다.
+      // 연습모드(DRY_RUN)는 실제로 나간 적이 없으므로 이 제한을 적용하지 않는다.
+      const dry = smtpStatus().dryRun;
+      const RESEND_BLOCK_MS = 30 * 24 * 60 * 60 * 1000;
 
       for (const c of approved) {
+        const lastSent = c.status === 'SENT' && c.deliveredAt ? Date.parse(c.deliveredAt) : 0;
+        if (confirm && !dry && lastSent && Date.now() - lastSent < RESEND_BLOCK_MS) {
+          const days = Math.ceil((RESEND_BLOCK_MS - (Date.now() - lastSent)) / 86400000);
+          results.push({ id: c.id, to: c.email, sent: false, note: `30일 재발송 차단 — ${days}일 뒤 가능` });
+          continue;
+        }
         if (!confirm) {
           c.status = 'QUEUED';
           c.queuedAt = new Date().toISOString();

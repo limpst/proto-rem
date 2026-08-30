@@ -1,0 +1,3 @@
+# proto-rem 은 파이썬 표준 라이브러리만 씁니다 (http.server / sqlite3 / urllib / smtplib).
+# 외부 패키지 의존성이 없어 이 파일은 비어 있습니다.
+# Render 가 이 파일을 보고 Python 런타임으로 빌드합니다.

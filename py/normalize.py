@@ -81,8 +81,34 @@ URL_RE = re.compile(
 # 직함으로 자주 쓰이는 말 — 한 줄 붙여넣기에서 이름/직함/회사를 가르는 힌트로 쓴다.
 TITLE_RE = re.compile(
     r"(회장|부회장|사장|부사장|전무|상무|이사|본부장|실장|센터장|소장|부장|차장|과장|팀장|대리|주임|사원|"
-    r"대표|CEO|CTO|CFO|COO|매니저|연구원|기사|기술사|박사)")
+    r"대표|CEO|CTO|CFO|COO|매니저|연구원|기사|기술사|박사|"
+    r"Manager|Director|Engineer|Architect|Researcher|Officer|President|Lead|Head|Analyst|Consultant|PhD)",
+    re.I)
 NAME_RE = re.compile(r"^[가-힣]{2,4}$")
+# 영문 이름은 "Firstname Lastname" 두 토큰이라 한글처럼 한 토큰으로 잡히지 않는다.
+EN_NAME_RE = re.compile(r"^[A-Z][a-z]+$")
+
+# 회사 도메인이 아닌 무료·포털 메일. 이메일에서 홈페이지를 유추할 때 걸러야 한다.
+FREE_MAIL = {
+    "gmail.com", "googlemail.com", "naver.com", "daum.net", "hanmail.net", "kakao.com",
+    "nate.com", "outlook.com", "hotmail.com", "live.com", "yahoo.com", "yahoo.co.kr",
+    "icloud.com", "me.com", "protonmail.com", "proton.me", "qq.com", "163.com",
+}
+
+
+def _clean_site(site: str, email: str) -> str:
+    """이메일에서 딸려 온 도메인은 홈페이지가 아니다.
+
+    URL 정규식이 이메일의 뒷부분(gmail.com)까지 잡아내서, 개인 메일 사용자의
+    홈페이지가 gmail.com 으로 박히는 일이 있었다. 무료 메일이면 버리고,
+    회사 도메인이면 그대로 둔다 (STEP 2 에서 접속 확인까지 거친다).
+    """
+    s = (site or "").strip().lower().lstrip("https://").lstrip("http://").lstrip("www.")
+    if not s:
+        return ""
+    if s in FREE_MAIL or (email and s == email.split("@")[-1].lower() and s in FREE_MAIL):
+        return ""
+    return site
 
 
 def _header_key(cell) -> str | None:
@@ -109,15 +135,38 @@ def _from_tokens(tokens: list[str], email: str, phone: str, site: str) -> dict |
     if not toks:
         return None
 
-    name = next((t for t in toks if NAME_RE.match(t)), None) or toks[0]
-    rest = [t for t in toks if t != name]
-    title = next((t for t in rest if TITLE_RE.search(t)), "")
-    company = " ".join(t for t in rest if t != title).strip()
-    # 이름 하나만 남았는데 회사가 비면, 이메일 도메인이라도 회사 자리에 둔다.
+    # ① 이름 — 한글은 한 토큰("호은성"), 영문은 두 토큰("Hwayoung Lee").
+    ki = next((n for n, t in enumerate(toks) if NAME_RE.match(t)), None)
+    if ki is not None:
+        name, rest = toks[ki], toks[:ki] + toks[ki + 1:]
+    else:
+        ei = next((n for n, t in enumerate(toks)
+                   if EN_NAME_RE.match(t) and n + 1 < len(toks) and EN_NAME_RE.match(toks[n + 1])), None)
+        if ei is not None:
+            name, rest = f"{toks[ei]} {toks[ei + 1]}", toks[:ei] + toks[ei + 2:]
+        else:
+            name, rest = toks[0], toks[1:]
+
+    # ② 직함 — 사전에 걸린 토큰 앞에 붙은 수식어까지 묶는다.
+    #    ("Quantitative Researcher" 의 Quantitative 가 회사명으로 새는 것을 막는다)
+    ti = next((n for n, t in enumerate(rest) if TITLE_RE.search(t)), None)
+    if ti is None:
+        title, company_toks = "", rest
+    else:
+        start = ti
+        if ti > 0 and EN_NAME_RE.match(rest[ti - 1]):
+            start = ti - 1
+        title = " ".join(rest[start:ti + 1])
+        company_toks = rest[:start] + rest[ti + 1:]
+
+    # ③ 남은 것이 회사. 회사가 비면 이메일 도메인이라도 넣는다(무료 메일은 제외).
+    company = " ".join(company_toks).strip()
     if not company and email:
-        company = email.split("@")[-1]
+        d = email.split("@")[-1]
+        company = "" if d.lower() in FREE_MAIL else d
+
     return {"name": name, "title": title, "company": company,
-            "email": email, "phone": phone, "site": site}
+            "email": email, "phone": phone, "site": _clean_site(site, email)}
 
 
 def parse_text(text: str) -> dict:
@@ -175,7 +224,7 @@ def parse_text(text: str) -> dict:
             oneline = False
             cards.append({"name": plain[0], "title": plain[1] if len(plain) > 1 else "",
                           "company": plain[2] if len(plain) > 2 else (plain[1] if len(plain) > 1 else ""),
-                          "email": email, "phone": phone, "site": site})
+                          "email": email, "phone": phone, "site": _clean_site(site, email)})
             continue
         # 3) 한 줄짜리 — 공백으로 나눠 이름/직함/회사를 배정한다.
         c = _from_tokens(re.split(r"[\s,|/]+", b), email, phone, site)

@@ -11,7 +11,7 @@
  *
  * 백엔드가 바뀌어도 호출부(enrich/generate/copy-ai)는 complete() 하나만 쓴다.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
 import { env } from './env.mjs';
 import { load, update } from './store.mjs';
@@ -21,6 +21,20 @@ export const OLLAMA_URL = env('OLLAMA_URL', 'http://127.0.0.1:11434');
 export const DEFAULT_OLLAMA_MODEL = env('OLLAMA_MODEL', 'exaone3.5:7.8b');
 
 let cachedBackend = null;
+let cliAvailable = null;
+
+/** claude CLI 가 실제로 설치돼 있는지 확인한다.
+    배포 서버에는 없다. 확인 없이 고르면 "spawn claude ENOENT" 로 터진다. */
+function claudeCliExists() {
+  if (cliAvailable !== null) return cliAvailable;
+  try {
+    const r = spawnSync('claude', ['--version'], {
+      windowsHide: true, shell: process.platform === 'win32', timeout: 8000,
+    });
+    cliAvailable = r.status === 0;
+  } catch { cliAvailable = false; }
+  return cliAvailable;
+}
 let cachedOverride = undefined;   // undefined = 아직 안 읽음, null = 저장된 선택 없음
 
 /**
@@ -69,8 +83,16 @@ export async function resolveBackend({ refresh = false } = {}) {
     cachedBackend = { name: forced, model: CLAUDE_MODEL, source, cloud: true };
   } else if (env('ANTHROPIC_API_KEY')) {
     cachedBackend = { name: 'claude-api', model: CLAUDE_MODEL, source, cloud: true };
-  } else {
+  } else if (claudeCliExists()) {
     cachedBackend = { name: 'claude-cli', model: CLAUDE_MODEL, source, cloud: true };
+  } else {
+    // 셋 다 없다. 여기서 정직하게 멈춰야 한다.
+    // 예전에는 claude-cli 로 넘어가 배포 서버에서 "spawn claude ENOENT" 로 터졌다.
+    cachedBackend = {
+      name: 'none', model: null, source, cloud: false,
+      hint: 'AI 백엔드가 없습니다. 배포 환경이라면 ANTHROPIC_API_KEY 환경변수를 설정하고, '
+          + '내 컴퓨터라면 Ollama 를 실행하거나 Claude Code 를 설치하세요.',
+    };
   }
   return cachedBackend;
 }
@@ -108,7 +130,8 @@ export async function complete(prompt, opts = {}) {
   const backend = await resolveBackend();
   if (backend.name === 'ollama') return viaOllama(prompt, { model: backend.model, ...opts });
   if (backend.name === 'claude-api') return viaApi(prompt, opts.maxTokens ?? 1500);
-  return viaCli(prompt);
+  if (backend.name === 'claude-cli') return viaCli(prompt);
+  throw new Error(backend.hint ?? 'AI 백엔드가 설정되지 않았습니다.');
 }
 
 /**
@@ -197,9 +220,12 @@ function viaCli(prompt) {
     let out = '', err = '';
     child.stdout.on('data', d => out += d);
     child.stderr.on('data', d => err += d);
-    child.on('error', reject);
+    child.on('error', e => reject(new Error(
+      e.code === 'ENOENT'
+        ? 'Claude CLI 를 찾지 못했습니다. 배포 환경이라면 ANTHROPIC_API_KEY 를 설정하세요.'
+        : `Claude CLI 실행 실패: ${e.message}`)));
     child.on('close', code => {
-      if (code !== 0) return reject(new Error(`claude CLI exit ${code}: ${err.slice(0, 500)}`));
+      if (code !== 0) return reject(new Error(`Claude CLI 오류 (exit ${code}): ${err.slice(0, 300)}`));
       resolve(out.trim());
     });
     child.stdin.write(prompt);

@@ -170,6 +170,11 @@ def _via_ollama(prompt: str, model: str, max_tokens: int | None, temperature: fl
 
 
 def _via_api(prompt: str, max_tokens: int) -> str:
+    if not env("ANTHROPIC_API_KEY"):
+        # 배포 서버에서 가장 흔한 사고. 원인을 화면에 그대로 띄워 준다.
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY 가 없습니다. Render 대시보드의 Environment 에 키를 넣으세요. "
+            "(로컬이라면 STEP 5 의 [AI 엔진] 에서 ollama 로 바꾸면 키 없이 됩니다.)")
     payload = json.dumps({
         "model": CLAUDE_MODEL,
         "max_tokens": max_tokens,
@@ -190,11 +195,17 @@ def _via_api(prompt: str, max_tokens: int) -> str:
 
 def _via_cli(prompt: str) -> str:
     """프롬프트는 stdin 으로 넘긴다. 인자로 넘기면 Windows 에서 줄바꿈이 깨진다."""
-    p = subprocess.run(
-        ["claude", "-p", "--model", CLAUDE_MODEL, "--output-format", "text"],
-        input=prompt, capture_output=True, text=True, encoding="utf-8",
-        shell=(__import__("sys").platform == "win32"),
-    )
+    try:
+        p = subprocess.run(
+            ["claude", "-p", "--model", CLAUDE_MODEL, "--output-format", "text"],
+            input=prompt, capture_output=True, text=True, encoding="utf-8",
+            shell=(__import__("sys").platform == "win32"),
+        )
+    except FileNotFoundError as e:
+        # 배포 서버에는 Claude Code CLI 가 없다. "spawn claude ENOENT" 의 정체.
+        raise RuntimeError(
+            "이 서버에는 claude CLI 가 설치돼 있지 않습니다. "
+            "LLM_BACKEND 를 claude-api(키 필요) 또는 ollama 로 바꾸세요.") from e
     if p.returncode != 0:
         raise RuntimeError(f"claude CLI exit {p.returncode}: {(p.stderr or '')[:500]}")
     return (p.stdout or "").strip()

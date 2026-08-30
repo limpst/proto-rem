@@ -189,6 +189,9 @@ export async function generateMessage({ card, segmentId, signals, channel = 'ema
 }
 
 export async function generateSegmentTemplate({ segmentId, channel = 'email', personaId, sourceProfile }) {
+  // 1:N 은 회사별 근거를 쓰지 않으므로 1:1 의 "근거 없으면 차단" 가드가 걸리지 않는다.
+  // 대신 고객군이 확정되지 않았으면 만들지 않는다. 미분류에 보내는 광고가 곧 스팸이다.
+  if (!segmentId || segmentId === 'unclassified') return { error: 'unclassified-segment' };
   const segment = SEGMENTS.find(s => s.id === segmentId);
   if (!segment) return { error: 'unknown-segment' };
 
