@@ -340,6 +340,30 @@ def route(path: str, method: str, body: dict, query: dict):
                 except Exception as e:
                     _job_fail_item(job_id, t.get("company") or t.get("name"), e)
                     site = {"ok": False, "reason": f"fetch-error: {e}"[:80], "text": ""}
+                # 본문이 비었으면 AI 를 부르지 않는다.
+                # 읽은 게 없는데 회사명만 보고 "안전진단 서비스 제공" 같은 문장을 지어내면,
+                # 그게 화면에 "확인된 사실" 로 올라가 그대로 메일에 인용된다.
+                # 업종 기본값은 최소한 일반론이라고 표시되지만 이건 표시조차 안 된다.
+                MIN_CHARS = 200
+                if len(site.get("text") or "") < MIN_CHARS:
+                    L.log("warn", "enrich",
+                          f"{t.get('company')} — 본문 {len(site.get('text') or '')}자, "
+                          f"AI 추출을 건너뛰고 업종 기본값을 씁니다")
+                    signals = SF.signals_for(
+                        t.get("segmentId"),
+                        f"홈페이지 본문 {len(site.get('text') or '')}자 (자바스크립트 렌더링 등)")
+                    cur = store.load()
+                    c = _card(cur, t["id"])
+                    if c is not None:
+                        c["siteFetch"] = {"ok": site["ok"], "reason": site["reason"],
+                                          "chars": len(site.get("text") or "")}
+                        c["signals"] = signals
+                        c["status"] = "ENRICHED"
+                    cur["step"] = 3
+                    store.save(cur)
+                    _job_set(job_id, done=i + 1)
+                    continue
+
                 try:
                     signals = enrich.extract_signals(t, site["text"])
                 except Exception as e:
