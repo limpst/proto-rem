@@ -24,7 +24,27 @@ _SCRIPT = re.compile(r"<(script|style)[\s\S]*?</\1>", re.I)
 _WS = re.compile(r"\s+")
 
 
+_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
+
+
+def normalize_url(u: str | None) -> str:
+    """스킴 없는 주소를 https:// 로 채운다.
+
+    명함·붙여넣기에서는 "atom-eng.co.kr" 처럼 스킴 없이 들어오는 쪽이 오히려 흔하다.
+    그대로 urlopen 에 넘기면 `unknown url type` 으로 무조건 실패해,
+    화면에는 "읽기 실패"만 뜨고 왜 실패했는지는 알 수 없다.
+    http/https 가 아닌 스킴(file: 등)은 읽지 않는다.
+    """
+    u = (u or "").strip()
+    if not u:
+        return ""
+    if not _SCHEME.match(u):
+        u = "https://" + u
+    return u if u.lower().startswith(("http://", "https://")) else ""
+
+
 def fetch_site(url: str | None) -> dict:
+    url = normalize_url(url)
     if not url:
         return {"ok": False, "reason": "no-url", "text": ""}
     try:
