@@ -232,6 +232,85 @@ const cardRows = (cards, { pick = true } = {}) => !cards.length
 /* ── 단계별 본문 ─────────────────────────────────────────── */
 const VIEWS = {
   ingest: () => `
+    <details class="panel">
+      <summary><b>명함 불러오기 전제 조건</b> — 이게 안 맞으면 0건으로 나옵니다</summary>
+      <div class="body">
+        <table><thead><tr><th style="width:34%">조건</th><th>왜 필요한가 · 확인하는 법</th></tr></thead><tbody>
+          <tr><td><b>① 리멤버에 로그인되어 있을 것</b></td>
+            <td>이 프로그램은 <b>비밀번호를 다루지 않습니다.</b> 이미 로그인된 브라우저의 화면을 빌려 쓰는 방식입니다.<br>
+              확인: 크롬에서 <code>card.rememberapp.co.kr</code> 접속 시 명함 목록이 바로 보이면 OK.
+              로그인 화면으로 넘어가면 먼저 로그인하세요.</td></tr>
+          <tr><td><b>② 명함첩에 명함이 있을 것</b></td>
+            <td>리멤버 화면 상단의 <b>전체 명함 (N)</b> 숫자와 이 프로그램의 숫자가 같아야 정상입니다.<br>
+              다르면 스크롤이 덜 됐거나, 본인 프로필이 섞인 것입니다.</td></tr>
+          <tr><td><b>③ 목록을 끝까지 스크롤할 것</b></td>
+            <td>리멤버는 화면을 내릴 때마다 명함을 조금씩 불러옵니다(무한 스크롤).
+              <b>화면에 보인 만큼만</b> 수집됩니다. 맨 아래까지 내려야 전부 들어옵니다.</td></tr>
+          <tr><td><b>④ 이 프로그램이 켜져 있을 것</b></td>
+            <td>스니펫이 수집한 명함을 이 서버로 보냅니다. 터미널의 <code>npm start</code> 창을 닫지 마세요.</td></tr>
+          <tr><td><b>⑤ 같은 컴퓨터에서 할 것</b></td>
+            <td>스니펫은 <code>localhost</code> 로 보냅니다. 다른 PC의 크롬에서는 전달되지 않습니다.
+              그 경우 <b>[JSON 파일로 저장]</b> 후 파일을 옮겨 올리세요.</td></tr>
+        </tbody></table>
+
+        <div class="cap" style="margin-top:16px">방법별 추가 조건</div>
+        <table><thead><tr><th style="width:34%">방법</th><th>추가로 필요한 것</th></tr></thead><tbody>
+          <tr><td>① 전용 브라우저 로그인</td>
+            <td>그 창에서 <b>네이버 또는 카카오</b>로 로그인. 구글은 자동화 창을 차단합니다
+              (<code>accounts.google.com/v3/signin/rejected</code>).</td></tr>
+          <tr><td>② 콘솔 스니펫</td>
+            <td>크롬 개발자도구(F12) 사용. 붙여넣기가 막히면 콘솔에 <code>allow pasting</code> 입력 후 재시도.</td></tr>
+          <tr><td>③ CDP 접속</td>
+            <td>크롬을 <b>완전히 종료</b>한 뒤 <code>--remote-debugging-port=9222</code> 로 재실행.
+              창이 하나라도 살아 있으면 새 인스턴스가 뜨지 않아 실패합니다.</td></tr>
+        </tbody></table>
+      </div>
+    </details>
+
+    <details class="panel">
+      <summary><b>보안 — 이 프로그램이 무엇을 하고, 무엇을 하지 않는가</b></summary>
+      <div class="body">
+        <div class="cap">하지 않는 것</div>
+        <table><tbody>
+          <tr><td style="width:34%"><b>비밀번호를 받지 않습니다</b></td>
+            <td>리멤버·구글·네이버 비밀번호를 입력받는 화면이 아예 없습니다.
+              로그인은 사용자가 브라우저에서 직접 하고, 이 프로그램은 그 결과만 빌려 씁니다.</td></tr>
+          <tr><td><b>비밀번호를 저장하지 않습니다</b></td>
+            <td>저장하는 자격증명은 <code>.env</code> 의 Gmail <b>앱 비밀번호</b> 하나뿐이고,
+              이 파일은 <code>.gitignore</code> 로 저장소에서 제외됩니다.</td></tr>
+          <tr><td><b>남의 명함을 가져오지 않습니다</b></td>
+            <td>수집 범위는 <b>본인 계정이 이미 화면에서 볼 수 있는 명함</b>뿐입니다.
+              권한을 넘어서는 조회는 하지 않습니다.</td></tr>
+        </tbody></table>
+
+        <div class="cap" style="margin-top:16px">데이터가 어디로 가는가</div>
+        <table><thead><tr><th style="width:34%">단계</th><th>경로</th></tr></thead><tbody>
+          <tr><td>수집</td><td>리멤버 페이지 안에서만 동작 → <code>localhost</code> 의 이 서버로 전송. 외부 서버 경유 없음</td></tr>
+          <tr><td>저장</td><td><code>data/proto-rem.db</code> (이 컴퓨터). 저장소에 커밋되지 않음</td></tr>
+          <tr><td>홈페이지 리서치</td><td>대상 회사의 <b>공개 홈페이지</b>만 읽음</td></tr>
+          <tr><td>메일 작성</td><td>현재 AI 백엔드: <b>${esc(S.backend?.name)}</b>.
+            이름·회사·직함이 AI 에 전달됩니다.
+            ${S.backend?.name === 'ollama'
+              ? '<b>로컬 모델이라 이 컴퓨터를 벗어나지 않습니다.</b>'
+              : '외부로 나가는 것이 부담되면 <code>.env</code> 에 <code>LLM_BACKEND=ollama</code> 를 넣으세요(느려집니다).'}</td></tr>
+          <tr><td>발송</td><td>Gmail SMTP. 승인한 건만, 확인 창을 거쳐서만 나갑니다</td></tr>
+        </tbody></table>
+
+        <div class="cap" style="margin-top:16px">알아두실 위험</div>
+        <ul class="muted" style="font-size:12.5px;line-height:1.9;margin:0;padding-left:18px">
+          <li><b>명함은 개인정보입니다.</b> <code>data/</code> 폴더를 메신저·메일로 공유하지 마세요.</li>
+          <li><b>이 서버에는 로그인이 없습니다.</b> 같은 네트워크의 다른 사람이 접근할 수 있으므로
+            사내망·공용 와이파이에서 포트를 열어두지 마세요. 인터넷 배포 시에는 접근 통제를 먼저 붙여야 합니다.</li>
+          <li><b>스니펫은 페이지의 네트워크 응답을 가로챕니다.</b> 붙여넣기 전에
+            <a href="/collect-snippet.js" target="_blank" style="color:var(--accent)">원문</a>을 확인하실 수 있습니다.
+            출처가 불분명한 콘솔 스니펫은 어떤 사이트에서도 붙여넣지 마세요.</li>
+          <li><b>광고성 메일은 사전 수신동의가 원칙입니다</b>(정보통신망법 제50조).
+            (광고) 표기·수신거부·야간 차단은 프로그램이 처리하지만 <b>동의 확보는 사람이 해야 합니다.</b></li>
+          <li><b>2단계 인증 백업 코드를 앱 비밀번호 자리에 넣지 마세요.</b> 형식이 다르고 작동하지 않습니다.</li>
+        </ul>
+      </div>
+    </details>
+
     <details class="panel" ${S.cards?.length ? '' : 'open'}>
       <summary>리멤버에서 가져오는 방법 3가지 — 처음이라면 펼쳐 보세요</summary>
       <div class="body">
