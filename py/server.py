@@ -824,21 +824,48 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         L.log("info", "deliver", f"{'실제 발송' if confirm else '큐 적재(dry-run)'} — {len(approved)}건")
-        for c in approved:
-            if not confirm:
+
+        if not confirm:
+            # 큐 적재는 즉시 끝난다. 예전처럼 동기 응답.
+            for c in approved:
                 c["status"] = "QUEUED"
                 c["queuedAt"] = now
                 results.append({"id": c["id"], "to": c.get("email"), "sent": False, "note": "dry-run (큐 적재만)"})
-                continue
-            r = deliver.send_email(c.get("email"), c["message"].get("subject"), c["message"].get("body"))
-            c["status"] = "SENT" if r["ok"] else "SEND_FAILED"
-            c["deliveredAt"] = now
-            c["deliverError"] = None if r["ok"] else r.get("error")
-            results.append({"id": c["id"], "to": c.get("email"), "sent": r["ok"],
-                            "note": r.get("messageId") or r.get("error")})
-        st["step"] = 7
-        store.save(st)
-        return 200, full_state(store.load(), results=results)
+            st["step"] = 7
+            store.save(st)
+            return 200, full_state(store.load(), results=results)
+
+        # 실제 발송은 건당 SMTP 연결에 최대 30초가 걸린다. 몇 건만 돼도 HTTP 응답을
+        # 붙잡고 있다가 배포 플랫폼이 연결을 끊어 버린다("Failed to fetch").
+        # 그래서 다른 긴 단계와 똑같이 작업으로 돌리고 진행률을 물어보게 한다.
+        jid = _job_new("deliver", len(approved))
+
+        def work(job_id: str):
+            sent_results = []
+            for i, c0 in enumerate(approved):
+                _job_set(job_id, current=f"{c0.get('name')} · {c0.get('company')}", done=i)
+                try:
+                    r = deliver.send_email(c0.get("email"), c0["message"].get("subject"),
+                                           c0["message"].get("body"))
+                except Exception as e:                     # 한 건 때문에 나머지를 잃지 않는다
+                    _job_fail_item(job_id, c0.get("name") or c0["id"], e)
+                    r = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+                def apply(st2, cid=c0["id"], rr=r):
+                    t2 = _card(st2, cid)
+                    if not t2:
+                        return
+                    t2["status"] = "SENT" if rr["ok"] else "SEND_FAILED"
+                    t2["deliveredAt"] = now
+                    t2["deliverError"] = None if rr["ok"] else rr.get("error")
+                    st2["step"] = 7
+                store.update(apply)
+                sent_results.append({"id": c0["id"], "to": c0.get("email"), "sent": r["ok"],
+                                     "note": r.get("messageId") or r.get("error")})
+                _job_set(job_id, done=i + 1, results=sent_results)
+
+        _job_run(jid, work)
+        return 202, {"jobId": jid, "total": len(approved), "status": "running"}
 
     return None
 

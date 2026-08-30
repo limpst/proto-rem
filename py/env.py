@@ -107,6 +107,13 @@ ENV_SPEC = [
         "why": "⚠ 0으로 바꾸는 순간부터 실제 메일이 나갑니다. 실전 캠페인 직전에만 0으로 두세요.",
     },
     {
+        "key": "TEST_REDIRECT_TO", "group": "메일 발송", "label": "테스트 수신 주소",
+        "secret": False, "placeholder": "me@example.com",
+        "what": "여기에 주소를 넣으면 모든 메일이 진짜 수신자 대신 이 주소로만 갑니다. "
+                "원래 수신자는 제목과 본문 머리에 남습니다.",
+        "why": "⚠ 실전 발송 전에는 반드시 비우세요. 비우지 않으면 고객에게 한 통도 가지 않습니다.",
+    },
+    {
         "key": "ALLOW_NIGHT_SEND", "group": "메일 발송", "label": "야간 발송 허용", "type": "bool",
         "secret": False, "placeholder": "0",
         "what": "1이면 밤 9시~아침 8시에도 발송합니다. 비워두면 그 시간대는 차단됩니다.",

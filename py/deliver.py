@@ -34,6 +34,7 @@ def smtp_status() -> dict:
         "configured": bool(user and env("GMAIL_APP_PASSWORD")),
         "user": re.sub(r"(.{2}).*(@.*)", r"\1***\2", user) if user else None,
         "dryRun": env("DRY_RUN") == "1",
+        "redirectTo": env("TEST_REDIRECT_TO") or None,
     }
 
 
@@ -63,6 +64,16 @@ def send_email(to: str, subject: str, body: str) -> dict:
         return {"ok": False,
                 "error": "야간(21~08시) 광고 전송 제한 — 자가 테스트라면 .env 에 ALLOW_NIGHT_SEND=1"}
 
+    # 테스트 중에는 진짜 수신자에게 나가면 안 된다. TEST_REDIRECT_TO 가 있으면
+    # 모든 메일을 그 주소로만 보내고, 원래 수신자는 제목·본문 머리에 남긴다.
+    # (실전 발송 전에는 반드시 비워야 한다. 화면 좌측 [메일] 칸에 표시된다.)
+    redirect = env("TEST_REDIRECT_TO")
+    real_to = to
+    if redirect:
+        to = redirect
+        subject = f"[테스트→{real_to}] {subject or ''}"
+        body = f"※ 테스트 발송입니다. 원래 수신자: {real_to}\n" + ("-" * 40) + "\n\n" + (body or "")
+
     msg = MIMEText(body or "", "plain", "utf-8")
     msg["Subject"] = Header(subject or "", "utf-8")
     msg["From"] = formataddr((str(Header(env("GMAIL_FROM_NAME", "에이톰엔지니어링"), "utf-8")), user))
@@ -72,8 +83,8 @@ def send_email(to: str, subject: str, body: str) -> dict:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ssl.create_default_context(), timeout=30) as s:
             s.login(user, re.sub(r"\s+", "", pw))
             s.sendmail(user, [to], msg.as_string())
-        L.log("ok", "smtp", f"발송 완료 → {to}")
-        return {"ok": True, "messageId": "sent"}
+        L.log("ok", "smtp", f"발송 완료 → {to}" + (f" (원래 수신자 {real_to})" if redirect else ""))
+        return {"ok": True, "messageId": "sent" + (f" → 테스트 주소 {to}" if redirect else "")}
     except Exception as e:
         L.log("error", "smtp", f"발송 실패 → {to}: {e}")
         return {"ok": False, "error": str(e)}

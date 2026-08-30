@@ -357,8 +357,13 @@ function draw(loading) {
     <dt>AI</dt><dd title="${esc(noAi ? (b.hint ?? '') : `${b.model ?? ''} · ${b.cloud ? '외부 전송' : '이 PC 안에서 처리'}`)}"
       style="color:${noAi ? 'var(--bad)' : b.cloud ? 'var(--warn)' : 'var(--ok)'}">
       ${noAi ? '⚠ 없음' : `${b.cloud ? '☁' : '🖥'} ${esc(b.name ?? '-')}`}</dd>
-    <dt>메일</dt><dd style="color:${S.smtp?.configured ? (S.smtp.dryRun ? 'var(--warn)' : 'var(--ok)') : 'var(--tx3)'}">
-      ${S.smtp?.configured ? (S.smtp.dryRun ? '연습모드' : '발송가능') : '미설정'}</dd>
+    <dt>메일</dt><dd title="${esc(S.smtp?.redirectTo
+        ? `테스트 수신 주소로만 나갑니다 — ${S.smtp.redirectTo}. 고객에게는 한 통도 가지 않습니다. 실전 전에 ⚙ 설정에서 비우세요.`
+        : S.smtp?.dryRun ? '연습모드(DRY_RUN=1) — 보내는 척만 하고 실제로는 나가지 않습니다.'
+        : S.smtp?.configured ? '실제로 메일이 나갑니다.' : '.env 에 GMAIL_USER / GMAIL_APP_PASSWORD 가 없습니다.')}"
+      style="color:${!S.smtp?.configured ? 'var(--tx3)' : (S.smtp.dryRun || S.smtp.redirectTo) ? 'var(--warn)' : 'var(--ok)'}">
+      ${!S.smtp?.configured ? '미설정'
+        : S.smtp.redirectTo ? '테스트수신' : S.smtp.dryRun ? '연습모드' : '발송가능'}</dd>
     <dt>서버</dt><dd>${esc(S.runtime === 'python' ? 'Python' : 'Node')} · SQLite</dd>
     <dt>저장</dt><dd title="${esc(S.storage?.note ?? '')}${S.storage?.stateDir ? ' · ' + esc(S.storage.stateDir) : ''}"
       style="color:${S.storage ? (S.storage.persistent ? 'var(--ok)' : 'var(--warn)') : 'var(--tx3)'}">
@@ -1379,11 +1384,20 @@ function bind() {
 
     send: async () => {
       const n = (S.cards ?? []).filter(c => c.message?.reviewStatus === 'APPROVED').length;
-      if (!confirm(`승인된 ${n}건을 실제로 발송합니다.\n되돌릴 수 없습니다. 계속할까요?`)) return api('/api/state');
-      const r = await api('/api/deliver', { confirm: true });
-      const sent = (r.results ?? []).filter(y => y.sent).length;
-      toast(`발송 ${sent}/${(r.results ?? []).length}건 성공`);
-      return r;
+      const to = S.smtp?.redirectTo;
+      const warn = to ? `\n테스트 수신 주소(${to})로만 갑니다. 고객에게는 가지 않습니다.`
+        : S.smtp?.dryRun ? '\n(연습모드라 실제로는 나가지 않습니다.)'
+        : '\n되돌릴 수 없습니다.';
+      if (!confirm(`승인된 ${n}건을 발송합니다.${warn}\n계속할까요?`)) return api('/api/state');
+      // 건당 SMTP 연결에 최대 30초가 걸린다. 응답을 붙잡고 있으면 배포 환경에서
+      // 연결이 끊겨 "Failed to fetch" 가 된다. 그래서 작업으로 돌린다.
+      const r = await runJob('/api/deliver', { confirm: true }, '메일 발송');
+      const res = r?.results ?? [];
+      const sent = res.filter(y => y.sent).length;
+      toast(`발송 ${sent}/${res.length}건 성공`
+        + (sent < res.length ? ` · 실패 예) ${res.find(y => !y.sent)?.note ?? ''}`.slice(0, 120) : ''),
+        sent < res.length);
+      return null;
     },
 
     prompt: async () => {
