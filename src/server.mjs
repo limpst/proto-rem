@@ -19,6 +19,8 @@ import { resolveBackend } from './llm.mjs';
 import { sendEmail, smtpStatus } from './deliver.mjs';
 import { toCards } from './normalize.mjs';
 import { resolveSite } from './resolve.mjs';
+import { classifyOne } from './classify-ai.mjs';
+import { parseText } from './normalize.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = process.env.PORT || 5173;
@@ -221,15 +223,57 @@ const server = http.createServer(async (req, res) => {
 
     // --- 4. 고객군 분류 + 선택 (HITL) ------------------------------------
     if (p === '/api/segment' && req.method === 'POST') {
-      return json(res, 200, update(st => {
-        for (const c of st.cards) {
+      const { useAi = false } = await readBody(req);
+
+      // 1차: 키워드 규칙
+      let st = update(s2 => {
+        for (const c of s2.cards) {
           const { segmentId, score } = classify(c);
           c.segmentId = segmentId;
           c.segmentScore = score;
+          c.segmentSource = ['internal', 'excluded'].includes(segmentId) ? 'rule'
+            : segmentId === 'unclassified' ? null : 'keyword';
           c.status = 'SCORED';
         }
-        st.step = 4;
-      }));
+        s2.step = 4;
+      });
+
+      // 2차: 규칙이 놓친 건만 AI 에게 물어본다. 건당 호출이라 대상만 추린다.
+      if (useAi) {
+        const st2 = load();
+        for (const c of st2.cards) {
+          if (c.excluded || c.segmentId !== 'unclassified') continue;
+          const r = await classifyOne(c);
+          c.segmentId = r.segmentId;
+          c.segmentSource = r.segmentId === 'unclassified' ? null : 'ai';
+          c.segmentAi = { confidence: r.confidence, reason: r.reason };
+        }
+        st = save(st2);
+      }
+      return json(res, 200, st);
+    }
+
+    // --- 1-d. 텍스트로 명함 직접 입력 -------------------------------------
+    // 명함이 몇 건뿐일 때 브라우저를 거치는 것보다 이쪽이 훨씬 빠르다.
+    if (p === '/api/paste-cards' && req.method === 'POST') {
+      const { text } = await readBody(req);
+      const { cards, mode } = parseText(text);
+      if (!cards.length) {
+        return json(res, 400, { error: '명함을 찾지 못했습니다. 이름이 포함된 줄이 있어야 합니다.' });
+      }
+      fs.mkdirSync(path.join(ROOT, 'data'), { recursive: true });
+      fs.writeFileSync(path.join(ROOT, 'data', 'cards.json'), JSON.stringify(cards, null, 2), 'utf8');
+      return json(res, 200, {
+        ...update(s2 => {
+          s2.cards = cards.map(c => ({ ...c, status: 'NEW', source: 'paste' }));
+          s2.source = 'paste';
+          s2.selection = [];
+          s2.step = 1;
+        }),
+        parsedAs: mode,
+        steps: STEPS, segments: SEGMENTS, company: COMPANY,
+        personas: PERSONAS, backend: await resolveBackend(), smtp: smtpStatus(),
+      });
     }
 
     // --- 명함 개별 제외 (본인 프로필 등) ---------------------------------

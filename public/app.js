@@ -34,6 +34,20 @@ const VIA = {
   none: '찾지 못함 — 직접 입력해 주세요',
 };
 
+/* 데이터 출처 아이콘 — 어디서 온 값인지 한눈에 구분한다.
+   추정값을 원본처럼 믿고 쓰면 엉뚱한 메일이 나가므로, 화면에서 반드시 갈라 보인다. */
+const SRC = {
+  raw:  { i: '⬇', t: '가져온 데이터 — 리멤버 원본 그대로', c: 'var(--tx2)' },
+  ai:   { i: '✧', t: 'AI 추정 — 사람이 확인 후 쓰세요', c: 'var(--accent)' },
+  calc: { i: '∑', t: '계산값 — 다른 값에서 자동 산출', c: 'var(--ok)' },
+  man:  { i: '✎', t: '직접 입력', c: 'var(--warn)' },
+};
+const srcTag = (k, extra = '') => {
+  const s2 = SRC[k]; if (!s2) return '';
+  return `<span title="${esc(s2.t)}${extra ? ' · ' + esc(extra) : ''}"
+    style="color:${s2.c};font-size:11px;margin-left:4px;cursor:help">${s2.i}</span>`;
+};
+
 /* ── 현재 상황 계산 ──────────────────────────────────────────
    진행도를 "몇 번 메뉴를 눌렀나"가 아니라 "데이터가 실제로 어디까지 왔나"로 센다.
    이래야 새로고침하거나 순서를 건너뛰어도 화면이 거짓말을 하지 않는다. */
@@ -186,8 +200,10 @@ const PRIMARY = {
   resolve: () => `<div class="row"><button data-act="resolvesites">홈페이지 자동 찾기</button></div>`,
   enrich: x => `<div class="row"><button data-act="enrich" ${x.site ? '' : 'disabled'}>전체 리서치 실행</button>
     <button class="ghost" data-act="prompt">AI 에게 보낼 지시문 미리보기</button></div>`,
-  segment: x => `<div class="row"><button data-act="segment">고객군 자동 분류</button>
-    ${x.classified ? '<span class="muted" style="font-size:12px">아래 표에서 체크박스로 대상을 고르세요</span>' : ''}</div>`,
+  segment: x => `<div class="row">
+      <button data-act="segment">고객군 분류 (규칙)</button>
+      <button data-act="segmentai">AI 로 마저 분류</button>
+      ${x.classified ? '<span class="muted" style="font-size:12px">아래 표에서 체크박스로 대상을 고르세요</span>' : ''}</div>`,
   generate: x => `<div class="row">
       <select id="ch" style="background:var(--sunk);color:var(--tx);border:1px solid var(--line);border-radius:7px;padding:8px 10px">
         <option value="email">이메일</option><option value="sms">문자(LMS)</option><option value="remember">리멤버 메시지</option>
@@ -200,9 +216,13 @@ const PRIMARY = {
 };
 
 /* ── 명함 표 ─────────────────────────────────────────────── */
+const LEGEND = `<div class="muted" style="font-size:11px;margin-bottom:8px;display:flex;gap:14px;flex-wrap:wrap">
+  ${Object.values(SRC).map(v => `<span><b style="color:${v.c}">${v.i}</b> ${esc(v.t.split(' — ')[0])}</span>`).join('')}
+</div>`;
+
 const cardRows = (cards, { pick = true } = {}) => !cards.length
   ? '<div class="muted" style="padding:8px 0">명함이 없습니다. STEP 1 에서 가져오세요.</div>'
-  : `<table><thead><tr>
+  : LEGEND + `<table><thead><tr>
       ${pick ? '<th style="width:26px"></th>' : ''}
       <th>담당자</th><th style="width:33%">회사 · 홈페이지</th><th>고객군</th><th>리서치 근거</th>
     </tr></thead><tbody>
@@ -210,21 +230,28 @@ const cardRows = (cards, { pick = true } = {}) => !cards.length
       const off = c.excluded || c.segmentId === 'internal';
       return `<tr class="${off ? 'off' : ''}">
       ${pick ? `<td>${off ? '' : `<input type="checkbox" class="pick" value="${c.id}" ${(S.selection ?? []).includes(c.id) ? 'checked' : ''}>`}</td>` : ''}
-      <td><b>${esc(c.name)}</b>
+      <td><b>${esc(c.name)}</b>${srcTag('raw')}
         <div class="muted" style="font-size:11.5px">${esc(c.title)}</div>
         <div class="muted" style="font-size:11px">${esc(c.email)}</div></td>
       <td>${esc(c.company)}
         <div style="margin-top:4px"><input class="site-in" data-site="${c.id}"
           value="${esc(c.siteUrl || c.site)}" placeholder="홈페이지 주소 (직접 입력 가능)"></div>
-        ${c.siteResolve ? `<div class="muted" style="font-size:10.5px;margin-top:3px">${esc(VIA[c.siteResolve.via] ?? c.siteResolve.via)}</div>` : ''}</td>
+        ${c.siteResolve ? `<div class="muted" style="font-size:10.5px;margin-top:3px">
+          ${srcTag({ card: 'raw', 'email-domain': 'calc', 'llm-guess': 'ai', manual: 'man' }[c.siteResolve.via] ?? '')}
+          ${esc(VIA[c.siteResolve.via] ?? c.siteResolve.via)}</div>` : ''}</td>
       <td>${c.excluded ? '<span class="tag bad">제외됨</span>'
         : c.segmentId === 'internal' ? '<span class="tag warn">자사</span>'
-        : c.segmentId && c.segmentId !== 'unclassified' ? `<span class="tag seg">${esc(seg(c.segmentId)?.label ?? c.segmentId)}</span>`
-        : '<span class="tag">미분류</span>'}
+        : c.segmentId && c.segmentId !== 'unclassified'
+          ? `<span class="tag seg">${esc(seg(c.segmentId)?.label ?? c.segmentId)}</span>`
+            + srcTag(c.segmentSource === 'ai' ? 'ai' : 'calc',
+                     c.segmentSource === 'ai' ? `확신도 ${c.segmentAi?.confidence ?? '-'}` : '회사명 키워드로 판정')
+          : '<span class="tag">미분류</span>'}
+        ${c.segmentSource === 'ai' && c.segmentAi?.reason
+          ? `<div class="muted" style="font-size:10.5px;margin-top:3px">${esc(c.segmentAi.reason)}</div>` : ''}
         <div style="margin-top:5px"><button class="ghost xs" data-ex="${c.id}" data-exv="${c.excluded ? '0' : '1'}"
           title="명함이 아닌 항목(본인 프로필 등)을 제외합니다">${c.excluded ? '되돌리기' : '제외'}</button></div></td>
       <td>${c.signals?.facts?.length
-        ? `<ul class="facts">${c.signals.facts.map(f => `<li>${esc(f)}</li>`).join('')}</ul>`
+        ? `${srcTag('ai', '홈페이지에서 AI가 추출')}<ul class="facts">${c.signals.facts.map(f => `<li>${esc(f)}</li>`).join('')}</ul>`
         : `<span class="muted" style="font-size:11.5px">${c.siteFetch ? `읽기 실패 (${esc(c.siteFetch.reason)})` : '아직 안 읽음'}</span>`}</td>
     </tr>`; }).join('')}
     </tbody></table>`;
@@ -343,8 +370,31 @@ const VIEWS = {
       </div>
     </details>
 
+    <details class="panel" open>
+      <summary><b>가장 빠른 방법 — 명함 정보를 그냥 붙여넣기</b> (몇 건이면 이게 제일 빠릅니다)</summary>
+      <div class="body">
+        <div class="muted" style="font-size:12.5px;margin-bottom:9px">
+          엑셀에서 복사한 표, 쉼표로 구분한 줄, 명함 정보를 그대로 긁은 덩어리 모두 됩니다.
+          이메일·전화·홈페이지는 위치가 달라도 알아서 찾아냅니다.</div>
+        <textarea id="paste" placeholder="예) 엑셀에서 복사
+이름	직함	회사	이메일	전화
+호은성	전무이사	에이톰엔지니어링	atom@atom-eng.co.kr	010-8247-2177
+
+예) 덩어리로 붙여넣기
+호은성
+전무이사
+에이톰엔지니어링
+atom@atom-eng.co.kr
+010-8247-2177"
+          style="width:100%;min-height:150px;background:var(--sunk);border:1px solid var(--line);
+          color:var(--tx);border-radius:8px;padding:11px;font-size:12.5px;line-height:1.7;
+          font-family:ui-monospace,Consolas,monospace"></textarea>
+        <div class="row" style="margin-top:9px"><button data-act="paste">붙여넣은 내용으로 명함 만들기</button></div>
+      </div>
+    </details>
+
     <div class="panel">
-      <div class="cap">가져온 명함 · 출처 ${S.source === 'remember-export' ? '리멤버' : '샘플 시드'}
+      <div class="cap">가져온 명함 · 출처 ${S.source === 'remember-export' ? '리멤버' : S.source === 'paste' ? '직접 입력' : '샘플 시드'}
         <button class="ghost xs" data-act="reset" style="margin-left:8px">전체 초기화</button></div>
       ${cardRows(S.cards ?? [], { pick: false })}
     </div>`,
@@ -493,6 +543,7 @@ function bind() {
       ? api('/api/reset', {}) : api('/api/state'),
     enrich: () => api('/api/enrich', {}),
     segment: () => api('/api/segment', {}),
+    segmentai: () => api('/api/segment', { useAi: true }),
     source: () => api('/api/source-profile', {}),
     resolvesites: () => api('/api/resolve-sites', {}),
     deliver: () => api('/api/deliver', { confirm: false }),
@@ -540,6 +591,14 @@ function bind() {
       const r = await api('/api/remember-export', { via: 'cdp' });
       alert(r.ok ? '가져오기 완료. [명함 불러오기]를 누르세요.' : `실패\n\n${r.log}`);
       return api('/api/state');
+    },
+    paste: async () => {
+      const t = $('#paste')?.value ?? '';
+      if (!t.trim()) { alert('붙여넣은 내용이 없습니다.'); return api('/api/state'); }
+      const r = await api('/api/paste-cards', { text: t });
+      if (r.error) { alert(r.error); return api('/api/state'); }
+      alert(`명함 ${(r.cards ?? []).length}건을 만들었습니다. (${r.parsedAs === 'table' ? '표 형식' : '덩어리 텍스트'}로 인식)`);
+      return r;
     },
     copysnippet: async () => {
       const code = await (await fetch('/collect-snippet.js')).text();
