@@ -12,8 +12,8 @@ import path from 'node:path';
 import { ROOT } from './browser.mjs';
 
 const TARGETS = [
-  'https://rememberapp.co.kr/#/namecard',
-  'https://rememberapp.co.kr/#/setting/config',
+  'https://card.rememberapp.co.kr/',
+  'https://card.rememberapp.co.kr/#/namecard',
 ];
 
 const { ctx, page } = await openBrowser();
