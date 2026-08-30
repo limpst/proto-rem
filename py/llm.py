@@ -197,25 +197,72 @@ def list_ollama_models() -> dict:
     return {"ok": True, "models": models}
 
 
-def complete(prompt: str, max_tokens: int | None = None, temperature: float | None = None) -> str:
-    b = resolve_backend()
-    t0 = time.time()
-    L.log("ai", "llm", f"요청 → {b['name']} / {b['model']}",
-          {"prompt": len(prompt), "cloud": b.get("cloud")})
-    try:
-        if b["name"] == "ollama":
-            out = _via_ollama(prompt, b["model"], max_tokens, temperature)
-        elif b["name"] == "claude-api":
-            out = _via_api(prompt, max_tokens or 1500)
-        elif b["name"] == "claude-cli":
-            out = _via_cli(prompt)
-        else:
-            raise RuntimeError(b.get("hint") or "AI 백엔드가 설정되지 않았습니다.")
-    except Exception as e:
-        L.log("error", "llm", f"실패 — {e}", {"ms": int((time.time() - t0) * 1000)})
-        raise
-    L.log("ok", "llm", "응답 수신", {"chars": len(out), "ms": int((time.time() - t0) * 1000)})
+def _run(name: str, model: str | None, prompt: str,
+         max_tokens: int | None, temperature: float | None) -> str:
+    if name == "ollama":
+        return _via_ollama(prompt, model or DEFAULT_OLLAMA_MODEL, max_tokens, temperature)
+    if name == "claude-api":
+        return _via_api(prompt, max_tokens or 1500)
+    if name == "claude-cli":
+        return _via_cli(prompt)
+    raise RuntimeError("AI 백엔드가 설정되지 않았습니다.")
+
+
+def _usable_backends() -> list[tuple[str, str | None]]:
+    """지금 실제로 쓸 수 있는 백엔드를 선호 순서로 돌려준다.
+
+    claude-api 가 앞에 온다. 로컬 모델은 CPU 에서 한 건에 수 분이 걸려
+    화면이 먼저 끊기는 일이 잦기 때문이다. 키가 없으면 자연히 건너뛴다.
+    """
+    out: list[tuple[str, str | None]] = []
+    if env("ANTHROPIC_API_KEY"):
+        out.append(("claude-api", CLAUDE_MODEL))
+    if ollama_alive():
+        out.append(("ollama", (_override() or {}).get("model") or DEFAULT_OLLAMA_MODEL))
+    if claude_cli_exists():
+        out.append(("claude-cli", CLAUDE_MODEL))
     return out
+
+
+def complete(prompt: str, max_tokens: int | None = None, temperature: float | None = None) -> str:
+    """지정된 백엔드로 먼저 시도하고, 실패하면 쓸 수 있는 다른 백엔드로 넘어간다.
+
+    로컬 모델 타임아웃이나 API 오류 하나로 파이프라인 전체가 멈추면
+    사용자는 "메일 만들기가 안 된다" 로만 겪는다. 대체 경로를 두고,
+    무엇으로 대체했는지는 로그에 남겨 숨기지 않는다.
+    """
+    b = resolve_backend()
+    chain: list[tuple[str, str | None]] = []
+    if b["name"] != "none":
+        chain.append((b["name"], b.get("model")))
+    for cand in _usable_backends():
+        if cand[0] != b["name"]:
+            chain.append(cand)
+
+    if not chain:
+        raise RuntimeError(b.get("hint") or "AI 백엔드가 설정되지 않았습니다.")
+
+    errors: list[str] = []
+    for i, (name, model) in enumerate(chain):
+        t0 = time.time()
+        if i:
+            L.log("warn", "llm", f"대체 백엔드로 재시도 → {name} / {model}",
+                  {"이전실패": errors[-1][:120]})
+        L.log("ai", "llm", f"요청 → {name} / {model}",
+              {"prompt": len(prompt), "cloud": name != "ollama" or is_cloud_model(model)})
+        try:
+            out = _run(name, model, prompt, max_tokens, temperature)
+        except Exception as e:
+            msg = f"{name}: {e}"
+            errors.append(msg)
+            L.log("error", "llm", f"실패 — {msg}", {"ms": int((time.time() - t0) * 1000)})
+            continue
+        L.log("ok", "llm", "응답 수신",
+              {"chars": len(out), "ms": int((time.time() - t0) * 1000),
+               "backend": name, "fallback": bool(i)})
+        return out
+
+    raise RuntimeError("모든 AI 백엔드가 실패했습니다 — " + " / ".join(errors))
 
 
 def _via_ollama(prompt: str, model: str, max_tokens: int | None, temperature: float | None) -> str:
