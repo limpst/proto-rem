@@ -98,11 +98,11 @@ aside{
 /* 단계 사이를 잇는 세로선 — 파이프라인이라는 걸 형태로 보여준다 */
 .rail{position:relative}
 .rail::before{
-  content:"";position:absolute;left:24px;top:16px;bottom:16px;width:1.5px;
+  content:"";position:absolute;left:26px;top:16px;bottom:16px;width:1.5px;
   background:linear-gradient(180deg,transparent,var(--line2) 12%,var(--line2) 88%,transparent);
 }
 .step{
-  position:relative;display:grid;grid-template-columns:25px 1fr;gap:11px;align-items:start;
+  position:relative;display:grid;grid-template-columns:29px 1fr;gap:11px;align-items:start;
   padding:9px 10px;border-radius:10px;cursor:pointer;
   transition:background .15s var(--ease),transform .15s var(--ease);
 }
@@ -114,8 +114,8 @@ aside{
   background:linear-gradient(180deg,var(--br),var(--br2));
 }
 .step .num{
-  position:relative;z-index:1;width:25px;height:25px;border-radius:50%;
-  display:grid;place-items:center;font-size:11px;font-weight:700;margin-top:1px;
+  position:relative;z-index:1;width:29px;height:29px;border-radius:50%;
+  display:grid;place-items:center;font-size:14px;font-weight:800;margin-top:0;
   border:1.5px solid var(--line2);background:var(--s1);color:var(--tx3);
   transition:all .18s var(--ease);
 }

@@ -104,6 +104,14 @@ ENV_SPEC = [
                "사용한 만큼 요금이 부과되며, 노출되면 즉시 폐기하고 새로 발급하세요.",
     },
     {
+        "key": "LLM_STEP_TIMEOUT_SEC", "group": "AI", "label": "백엔드 전환 대기 시간(초)",
+        "secret": False, "placeholder": "150",
+        "what": "AI 한 곳에 최대 몇 초까지 기다릴지입니다. 넘기면 실패로 보고 다음 AI 로 넘어갑니다.",
+        "why": "로컬 모델은 한 건에 5분이 넘기도 합니다. 무한정 기다리면 화면이 먼저 끊겨 "
+               "'그냥 안 된다'로만 보입니다. 짧게 잡으면 빠른 AI 로 일찍 넘어가고, "
+               "길게 잡으면 로컬에서 끝까지 시도합니다.",
+    },
+    {
         "key": "OLLAMA_MODEL", "group": "AI", "label": "Ollama 모델",
         "secret": False, "placeholder": "exaone3.5:7.8b",
         "what": "로컬 AI 를 쓸 때 어떤 모델을 쓸지 지정합니다.",

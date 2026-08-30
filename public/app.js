@@ -442,6 +442,10 @@ const T = {
   paste: '위 상자의 텍스트를 표·덩어리·한 줄 중 무엇이든 해석해 명함을 만듭니다. 기존 명함 목록은 대체됩니다.',
   addcard: '명함 한 건을 직접 추가합니다. 기존 목록은 그대로 두고 맨 뒤에 붙습니다.',
   delcard: '이 명함을 목록에서 완전히 지웁니다. 되돌릴 수 없습니다.',
+  setSave: '고친 값을 .env 파일에 씁니다. 항목에 따라 서버를 다시 시작해야 적용되는 것도 있습니다.',
+  setReveal: '가려진 비밀값(API 키·앱 비밀번호)을 화면에 그대로 보여줍니다. 화면 공유 중에는 누르지 마세요.',
+  setReload: '.env 의 현재 값을 다시 읽어옵니다. 저장하지 않은 입력은 버려집니다.',
+  setPending: '고쳐도 바로 반영되지 않습니다 — [변경 저장]을 눌러야 .env 에 씁니다.',
   editcard: '이름·직함·회사·이메일·전화를 이 자리에서 고칩니다. [저장]을 눌러야 반영됩니다.',
   savecard: '고친 내용을 저장합니다. 회사명이 바뀌면 고객군도 다시 판정됩니다. (홈페이지 주소는 입력칸을 벗어나는 즉시 따로 저장됩니다)',
   cancelcard: '고치던 내용을 버리고 원래 값으로 되돌립니다.',
@@ -781,13 +785,28 @@ function settingsView() {
 
     <div class="panel">
       <div class="row">
-        <button data-act="settings-save" ${dirty ? '' : 'disabled'}>변경 저장${dirty ? ` (${dirty}건)` : ''}</button>
-        <button class="ghost" data-act="settings-reveal">${settingsReveal ? '비밀값 가리기' : '비밀값 보기'}</button>
-        <button class="ghost" data-act="settings-reload">다시 불러오기</button>
+        <button data-act="settings-save" ${dirty ? '' : 'disabled'}
+          title="${dirty ? T.setSave : '아직 고친 값이 없습니다. 아래에서 값을 바꾸면 활성화됩니다.'}">변경 저장${dirty ? ` (${dirty}건)` : ''}</button>
+        <button class="ghost" data-act="settings-reveal"
+          title="${settingsReveal ? '비밀값을 다시 가립니다.' : T.setReveal}">${settingsReveal ? '비밀값 가리기' : '비밀값 보기'}</button>
+        <button class="ghost" data-act="settings-reload" title="${T.setReload}">다시 불러오기</button>
         <span class="muted" style="font-size:12px">
           비워서 저장하면 그 항목을 삭제하고 기본값으로 되돌립니다.</span>
       </div>
     </div>
+
+    ${dirty ? `
+      <div style="position:sticky;bottom:calc(var(--console-h) + 12px);z-index:40;margin:0 0 14px">
+        <div style="background:linear-gradient(135deg,#182240,#141b2e);border:1px solid var(--br);
+          border-radius:12px;padding:13px 16px;display:flex;align-items:center;gap:12px;
+          flex-wrap:wrap;box-shadow:var(--sh-lg)">
+          <b style="font-size:13px">저장하지 않은 변경 ${dirty}건</b>
+          <span class="muted" style="font-size:12px">화면을 옮기면 사라집니다</span>
+          <span style="flex:1"></span>
+          <button data-act="settings-save" title="${T.setSave}">변경 저장</button>
+          <button class="ghost" data-act="settings-reload" title="${T.setReload}">되돌리기</button>
+        </div>
+      </div>` : ''}
 
     ${groups.map(g => `
       <div class="panel">
@@ -809,12 +828,15 @@ function settingsView() {
             ${isBool
               ? `<div class="row">
                    <button class="opt ${String(val) === '1' ? 'on' : ''}" style="width:auto;padding:7px 14px"
-                     data-set="${i.key}" data-val="1">켜기 (1)</button>
+                     data-set="${i.key}" data-val="1"
+                     title="${esc(i.key)} 를 1(켬)로 둡니다. ${T.setPending}">켜기 (1)</button>
                    <button class="opt ${String(val) !== '1' ? 'on' : ''}" style="width:auto;padding:7px 14px"
-                     data-set="${i.key}" data-val="">끄기</button>
+                     data-set="${i.key}" data-val=""
+                     title="${esc(i.key)} 를 비워 끕니다. ${T.setPending}">끄기</button>
                  </div>`
               : `<input class="site-in" style="max-width:520px" data-setting="${i.key}"
                    value="${esc(val)}" placeholder="${esc(i.placeholder ?? '')}"
+                   title="${i.secret ? '비밀값입니다 — 화면에는 가려서 나오고 [비밀값 보기] 로만 확인됩니다. ' : ''}${T.setPending} 비워서 저장하면 이 항목을 지우고 기본값으로 되돌립니다."
                    ${i.secret && !settingsReveal ? 'type="password"' : ''}>`}
           </div>`;
         }).join('')}
@@ -1223,12 +1245,12 @@ function bind() {
     },
     reset: () => confirm('가져온 명함과 만든 메일이 모두 지워집니다. 계속할까요?')
       ? api('/api/reset', {}) : api('/api/state'),
-    enrich: () => api('/api/enrich', {}),
+    enrich: async () => { await runJob('/api/enrich', {}, '홈페이지 리서치'); return null; },
     segment: () => api('/api/segment', {}),
     segmentai: () => api('/api/segment', { useAi: true }),
     interests: () => api('/api/interests', {}),
     source: () => api('/api/source-profile', {}),
-    resolvesites: () => api('/api/resolve-sites', {}),
+    resolvesites: async () => { await runJob('/api/resolve-sites', {}, '홈페이지 찾는 중'); return null; },
     deliver: () => api('/api/deliver', { confirm: false }),
 
     addcard: async ctx => {
@@ -1589,7 +1611,12 @@ async function runJob(startPath, startBody, label) {
     if (j.status === 'failed') throw new Error(j.error || '작업이 실패했습니다.');
     const done = j.done ?? 0;
     render(`${label} — ${done}/${total || '?'}${j.current ? ` · ${j.current}` : ''}`);
-    if (j.status === 'done') { adopt(j); return j; }
+    if (j.status === 'done') {
+      adopt(j);
+      if (j.failed) log('warn', '작업', `${label} — ${j.failed}건 건너뜀 (기본값으로 대체)`,
+                        (j.errors ?? []).slice(0, 3).join(' / '));
+      return j;
+    }
   }
   throw new Error('작업이 너무 오래 걸립니다.');
 }
@@ -1667,23 +1694,30 @@ const SC_RUN = {
   },
 
   async resolve() {
-    let r = await api('/api/mode', { mode: S.mode ?? '1:1', personaId: S.personaId ?? 'sales' });
+    const r = await api('/api/mode', { mode: S.mode ?? '1:1', personaId: S.personaId ?? 'sales' });
     if (r.error) throw new Error(r.error);
     adopt(r);
-    r = await api('/api/resolve-sites', {});
-    if (r.error) throw new Error(r.error);
-    adopt(r);
+
+    // 이미 홈페이지가 다 확보돼 있으면 다시 찾지 않는다.
+    // 탐색은 회사당 수십 초가 걸리고, 결과가 바뀔 일도 없다.
+    const before = stats();
+    if (before.site >= before.usable.length && before.usable.length > 0) {
+      return `${S.personaId} 명의 · ${S.mode} · 홈페이지 ${before.site}/${before.usable.length}건 (이미 확보 — 탐색 생략)`;
+    }
+
+    await runJob('/api/resolve-sites', {}, 'STEP 2 · 홈페이지 찾는 중');
     const x = stats();
     return `${S.personaId} 명의 · ${S.mode} · 홈페이지 ${x.site}/${x.usable.length}건`;
   },
 
   async enrich() {
-    const r = await api('/api/enrich', {});
-    if (r.error) throw new Error(r.error);
-    adopt(r);
+    const j = await runJob('/api/enrich', {}, 'STEP 3 · 홈페이지 리서치');
     const x = stats();
-    if (!x.facts) throw new Error('근거를 하나도 뽑지 못했습니다. 홈페이지 주소나 AI 백엔드를 확인하세요.');
-    return `${x.facts}개 회사에서 근거 확보`;
+    const sector = (S.cards ?? []).filter(c => c.signals?.kind === 'sector').length;
+    // 근거가 0이어도 멈추지 않는다. 업종 기본값이 대신 들어가고, 검토에서 사람이 판단한다.
+    return `근거 ${x.facts}건`
+      + (sector ? ` · 업종 기본값 대체 ${sector}건` : '')
+      + (j?.failed ? ` · 건너뜀 ${j.failed}건` : '');
   },
 
   async segment() {
@@ -1708,8 +1742,11 @@ const SC_RUN = {
   async generate() {
     await runJob('/api/generate', { channel: 'email', restart: true }, 'STEP 5 · 문구 생성');
     const x = stats();
-    if (!x.drafted) throw new Error(`초안이 만들어지지 않았습니다 (차단 ${x.held}건).`);
-    return `초안 ${x.drafted}건` + (x.held ? ` · 근거부족 차단 ${x.held}건` : '');
+    if (!x.drafted && !x.held) throw new Error('문안이 하나도 만들어지지 않았습니다.');
+    const sector = (S.cards ?? []).filter(c => c.message?.kind === 'sector').length;
+    return `초안 ${x.drafted}건`
+      + (sector ? ` · 업종 기본 문안 ${sector}건` : '')
+      + (x.held ? ` · 차단 ${x.held}건` : '');
   },
 
   async review() {

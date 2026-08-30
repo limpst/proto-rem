@@ -25,9 +25,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import classify_ai, copy_ai, deliver, enrich, generate, llm, normalize, resolve, store
+from . import classify_ai, copy_ai, deliver, enrich, generate, llm, normalize, resolve
+from . import sector_fallback as SF
+from . import store
 from . import log as L
 from .domain import COMPANY, PERSONAS, SEGMENTS, classify
+from .domain import persona as persona_of
 from .domain import segment as seg_of
 from .env import settings_view, write_env
 
@@ -67,7 +70,9 @@ def _job_new(kind: str, total: int) -> str:
     with _JOB_LOCK:
         _JOBS[jid] = {"id": jid, "kind": kind, "status": "running",
                       "total": total, "done": 0, "current": "", "error": None,
-                      "startedAt": time.time()}
+                      # 건별 실패는 여기 쌓고 작업은 계속 간다.
+                      # 한 건 때문에 전체가 멈추면 나머지 대상이 통째로 날아간다.
+                      "failed": 0, "errors": [], "startedAt": time.time()}
     return jid
 
 
@@ -81,6 +86,16 @@ def _job_get(jid: str) -> dict | None:
     with _JOB_LOCK:
         j = _JOBS.get(jid)
         return dict(j) if j else None
+
+
+def _job_fail_item(jid: str, label: str, err: Exception):
+    """건별 실패를 기록하고 넘어간다. 작업 자체는 실패로 만들지 않는다."""
+    with _JOB_LOCK:
+        j = _JOBS.get(jid)
+        if j:
+            j["failed"] = j.get("failed", 0) + 1
+            j.setdefault("errors", []).append(f"{label}: {type(err).__name__}: {err}"[:200])
+    L.log("warn", "job", f"{label} 건너뜀 — {err}")
 
 
 def _job_run(jid: str, fn):
@@ -233,18 +248,40 @@ def route(path: str, method: str, body: dict, query: dict):
     # --- 2-b. 홈페이지 자동 탐색 ------------------------------------------
     if path == "/api/resolve-sites" and method == "POST":
         st = store.load()
-        targets = _usable(st)
-        L.log("info", "resolve", f"홈페이지 탐색 시작 — {len(targets)}건")
-        for c in targets:
-            if c.get("siteUrl") and (c.get("siteResolve") or {}).get("via") == "card":
-                continue
-            r = resolve.resolve_site(c)
-            c["siteUrl"] = r["siteUrl"]
-            c["siteResolve"] = {"via": r["via"], "tried": r["tried"]}
-            if c.get("status") == "NEW":
-                c["status"] = "RESOLVED"
-        st["step"] = 2
-        return 200, full_state(store.save(st))
+        targets = [c for c in st["cards"]
+                   if not c.get("excluded") and c.get("segmentId") != "internal"]
+        if not targets:
+            return 400, {"error": "홈페이지를 찾을 대상이 없습니다."}
+        jid = _job_new("resolve", len(targets))
+
+        def work(job_id: str):
+            for i, t in enumerate(targets):
+                _job_set(job_id, current=t.get("company") or t.get("name"), done=i)
+                cur = store.load()
+                c = _card(cur, t["id"])
+                if c is None:
+                    continue
+                if c.get("siteUrl") and (c.get("siteResolve") or {}).get("via") == "card":
+                    _job_set(job_id, done=i + 1)
+                    continue
+                try:
+                    r = resolve.resolve_site(c)
+                except Exception as e:
+                    # 한 회사를 못 찾아도 나머지는 계속 찾는다. 빈 값이 곧 기본값이다.
+                    _job_fail_item(job_id, t.get("company") or t.get("name"), e)
+                    r = {"siteUrl": "", "via": "none", "tried": []}
+                c["siteUrl"] = r["siteUrl"]
+                c["siteResolve"] = {"via": r["via"], "tried": r["tried"]}
+                c["resolved"] = bool(r["siteUrl"])
+                if c.get("status") == "NEW":
+                    c["status"] = "RESOLVED"
+                cur["step"] = 2
+                store.save(cur)
+                _job_set(job_id, done=i + 1)
+
+        _job_run(jid, work)
+        return 202, {"jobId": jid, "total": len(targets), "status": "running"}
+
 
     # --- 2-c. 홈페이지 수동 입력 ------------------------------------------
     if path == "/api/set-site" and method == "POST":
@@ -278,8 +315,6 @@ def route(path: str, method: str, body: dict, query: dict):
 
     # --- 3. 리서치 --------------------------------------------------------
     if path == "/api/enrich" and method == "POST":
-        # AI 를 못 쓰는 상태면 12건을 다 돌려 12번 똑같이 실패시키지 않는다.
-        # 원인을 한 줄로 알려주고 즉시 멈추는 편이 낫다.
         b = llm.resolve_backend(refresh=True)
         if b["name"] == "none":
             L.log("error", "enrich", f"리서치 불가 — {b.get('hint')}")
@@ -287,37 +322,51 @@ def route(path: str, method: str, body: dict, query: dict):
                                   + str(b.get("hint", ""))}
 
         st = store.load()
-        if not st.get("sourceProfile"):
-            st["sourceProfile"] = enrich.build_source_profile()
         ids = body.get("ids") or []
         targets = [c for c in st["cards"] if not ids or c["id"] in ids]
-        L.log("info", "enrich", f"리서치 시작 — {len(targets)}건",
-              {"backend": b["name"], "model": b["model"]})
+        if not targets:
+            return 400, {"error": "리서치할 대상이 없습니다."}
+        jid = _job_new("enrich", len(targets))
 
-        ai_fail = 0
-        for c in targets:
-            site = enrich.fetch_site(c.get("siteUrl"))
-            c["siteFetch"] = {"ok": site["ok"], "reason": site["reason"], "chars": len(site["text"])}
-            if not site["ok"]:
-                # 홈페이지를 못 읽었으면 AI 를 부를 이유가 없다. 호출 낭비를 막는다.
-                c["signals"] = {"facts": [], "building_signals": {}, "confidence": "low",
-                                "_skipped": f"홈페이지를 읽지 못함 ({site['reason']})"}
-                c["status"] = "ENRICHED"
-                continue
-            c["signals"] = enrich.extract_signals(c, site["text"])
-            c["status"] = "ENRICHED"
-            if c["signals"].get("_error"):
-                ai_fail += 1
-                # 첫 건이 AI 호출 자체로 실패하면 나머지도 같은 이유로 실패한다. 즉시 멈춘다.
-                if ai_fail == 1 and len(targets) > 1:
-                    L.log("error", "enrich",
-                          f"AI 호출 실패로 중단 — {c['signals']['_error']}")
-                    store.save(st)
-                    return 200, full_state(store.load(),
-                                           warning=f"AI 호출이 실패해 리서치를 중단했습니다: "
-                                                   f"{c['signals']['_error']}")
-        st["step"] = 3
-        return 200, full_state(store.save(st))
+        def work(job_id: str):
+            cur = store.load()
+            if not cur.get("sourceProfile"):
+                cur["sourceProfile"] = enrich.build_source_profile()
+                store.save(cur)
+            for i, t in enumerate(targets):
+                _job_set(job_id, current=t.get("company") or t.get("name"), done=i)
+                try:
+                    site = enrich.fetch_site(t.get("siteUrl"))
+                except Exception as e:
+                    _job_fail_item(job_id, t.get("company") or t.get("name"), e)
+                    site = {"ok": False, "reason": f"fetch-error: {e}"[:80], "text": ""}
+                try:
+                    signals = enrich.extract_signals(t, site["text"])
+                except Exception as e:
+                    # AI 가 실패해도 파이프라인은 멈추지 않는다. 업종 일반 특성으로 대체한다.
+                    _job_fail_item(job_id, t.get("company") or t.get("name"), e)
+                    signals = SF.signals_for(t.get("segmentId"), f"{type(e).__name__}")
+
+                # AI 는 성공했는데 건질 사실이 없는 경우(자바스크립트 렌더링 사이트 등)도
+                # 같은 취급을 한다. 근거 0개로 두면 그 대상만 통째로 빠진다.
+                if not (signals or {}).get("facts"):
+                    fb = SF.signals_for(t.get("segmentId"), site.get("reason") or "근거 없음")
+                    if fb["facts"]:
+                        signals = fb
+                cur = store.load()
+                c = _card(cur, t["id"])
+                if c is not None:
+                    c["siteFetch"] = {"ok": site["ok"], "reason": site["reason"],
+                                      "chars": len(site["text"])}
+                    c["signals"] = signals
+                    c["status"] = "ENRICHED"
+                cur["step"] = 3
+                store.save(cur)
+                _job_set(job_id, done=i + 1)
+
+        _job_run(jid, work)
+        return 202, {"jobId": jid, "total": len(targets), "status": "running"}
+
 
     # --- 3-b. 프롬프트 미리보기 -------------------------------------------
     if path == "/api/prompt-preview" and method == "POST":
@@ -534,8 +583,20 @@ def route(path: str, method: str, body: dict, query: dict):
                 for i, sid in enumerate(seg_ids):
                     _job_set(job_id, current=f"고객군 {sid}", done=i)
                     L.log("info", "generate", f"1:N 공통 문안 생성 — {sid}")
-                    tpl = generate.generate_segment_template(
-                        sid, copy_guide=picked.get(sid) or [], **common)
+                    try:
+                        tpl = generate.generate_segment_template(
+                            sid, copy_guide=picked.get(sid) or [], **common)
+                    except Exception as e:
+                        _job_fail_item(job_id, f"고객군 {sid}", e)
+                        tpl = None
+                    if not tpl or tpl.get("error"):
+                        seg = seg_of(sid)
+                        if seg:
+                            base = SF.template_for(seg, persona_of(common.get("persona_id")), COMPANY)
+                            tpl = generate.apply_compliance(base, channel, common.get("persona_id"))
+                            tpl["kind"] = "sector"
+                            tpl.pop("error", None)
+                            L.log("warn", "generate", f"고객군 {sid} — 업종 기본 문안으로 대체")
                     cur = store.load()
                     tpls = dict(cur.get("templates") or {})
                     tpls[sid] = tpl
@@ -555,9 +616,28 @@ def route(path: str, method: str, body: dict, query: dict):
             for i, t in enumerate(targets):
                 _job_set(job_id, current=f"{t.get('name')} · {t.get('company')}", done=i)
                 L.log("info", "generate", f"1:1 문안 생성 — {t.get('name')} · {t.get('company')}")
-                msg = generate.generate_message(
-                    t, t.get("segmentId"), t.get("signals") or {"facts": []},
-                    copy_guide=picked.get(t.get("segmentId")) or [], **common)
+                try:
+                    msg = generate.generate_message(
+                        t, t.get("segmentId"), t.get("signals") or {"facts": []},
+                        copy_guide=picked.get(t.get("segmentId")) or [], **common)
+                except Exception as e:
+                    _job_fail_item(job_id, t.get("name"), e)
+                    msg = None
+
+                # AI 가 실패했거나 "근거 부족" 등으로 문안을 못 냈으면
+                # 업종 기본 문안으로 대체한다. 어떤 경우에도 빈손으로 다음 단계에
+                # 넘기지 않는다. 대신 kind='sector' 로 표시해 검토에서 구분되게 한다.
+                if not msg or msg.get("error"):
+                    seg = seg_of(t.get("segmentId"))
+                    if seg:
+                        tpl = SF.template_for(seg, persona_of(common.get("persona_id")), COMPANY)
+                        msg = generate.render_template(
+                            generate.apply_compliance(tpl, channel, common.get("persona_id")),
+                            t, channel)
+                        msg["kind"] = "sector"
+                        msg["fallbackFrom"] = (msg.get("error") or "AI 생성 실패")
+                        msg.pop("error", None)
+                        L.log("warn", "generate", f"{t.get('name')} — 업종 기본 문안으로 대체")
                 cur = store.load()
                 c = _card(cur, t["id"])
                 if c is not None:
@@ -578,7 +658,8 @@ def route(path: str, method: str, body: dict, query: dict):
         if not j:
             return 404, {"error": "그런 작업이 없습니다."}
         if j["status"] in ("done", "failed"):
-            return 200, {**j, **full_state(store.load())}
+            # 상태를 먼저 펼치고 작업 정보를 덮어써야 failed/errors 가 살아남는다.
+            return 200, {**full_state(store.load()), **j}
         return 200, j
 
 

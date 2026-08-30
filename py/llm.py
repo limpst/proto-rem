@@ -286,7 +286,9 @@ def _via_ollama(prompt: str, model: str, max_tokens: int | None, temperature: fl
 
     req = urllib.request.Request(f"{OLLAMA_URL}/api/generate", data=payload,
                                  headers={"content-type": "application/json"})
-    timeout = env_int("OLLAMA_TIMEOUT_MS", 900000) / 1000
+    # 한 백엔드에 얼마나 기다릴지. 이 시간을 넘기면 실패로 보고 다음 백엔드로 넘어간다.
+    # 무한정 기다리면 화면이 먼저 끊기고, 사용자는 "그냥 안 된다" 로만 겪는다.
+    timeout = env_int("LLM_STEP_TIMEOUT_SEC", 150)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return str(json.loads(r.read().decode("utf-8")).get("response") or "").strip()
@@ -311,7 +313,7 @@ def _via_api(prompt: str, max_tokens: int) -> str:
         "anthropic-version": "2023-06-01",
     })
     try:
-        with urllib.request.urlopen(req, timeout=300) as r:
+        with urllib.request.urlopen(req, timeout=env_int("LLM_STEP_TIMEOUT_SEC", 150)) as r:
             j = json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"Claude API {e.code}: {e.read().decode('utf-8', 'replace')[:400]}") from e
