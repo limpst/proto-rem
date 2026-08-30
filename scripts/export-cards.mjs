@@ -22,6 +22,7 @@ import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { openBrowser, ROOT } from './browser.mjs';
+import { harvest, toCards } from '../src/normalize.mjs';
 
 const argv = process.argv.slice(2);
 const arg = k => argv.find(a => a.startsWith(`--${k}=`))?.split('=')[1];
@@ -29,16 +30,6 @@ const VIA = arg('via') ?? process.env.REMEMBER_VIA ?? 'profile';
 const CDP = process.env.CDP_URL ?? 'http://localhost:9222';
 const CARD_URL = 'https://card.rememberapp.co.kr/';
 
-/** 응답 JSON 어디에 명함 배열이 있는지 모르므로, 명함처럼 생긴 객체를 재귀 탐색한다. */
-const CARD_KEYS = ['name', 'company', 'companyName', 'mobile', 'email', 'department', 'position'];
-function harvest(node, out, depth = 0) {
-  if (!node || depth > 8) return;
-  if (Array.isArray(node)) { for (const v of node) harvest(v, out, depth + 1); return; }
-  if (typeof node !== 'object') return;
-  const keys = Object.keys(node);
-  if (CARD_KEYS.filter(k => keys.includes(k)).length >= 3) out.push(node);
-  for (const v of Object.values(node)) harvest(v, out, depth + 1);
-}
 
 async function open() {
   if (VIA === 'cdp') {
@@ -92,26 +83,7 @@ console.log(`\n  API 응답 ${raw.length}건 수집`);
 
 const found = [];
 for (const r of raw) harvest(r.body, found);
-
-const seen = new Set();
-const cards = [];
-for (const [i, c] of found.entries()) {
-  const key = `${c.name ?? ''}|${c.company ?? c.companyName ?? ''}|${c.mobile ?? c.phone ?? ''}`;
-  if (key === '||' || seen.has(key)) continue;
-  seen.add(key);
-  cards.push({
-    id: `r${String(i).padStart(4, '0')}`,
-    name: c.name ?? '',
-    title: c.position ?? c.title ?? '',
-    company: c.company ?? c.companyName ?? '',
-    dept: c.department ?? '',
-    email: c.email ?? '',
-    phone: c.mobile ?? c.phone ?? '',
-    site: c.homepage ?? c.website ?? '',
-    met_at: '명함 교환',
-    note: c.memo ?? '',
-  });
-}
+const cards = toCards(found);
 
 await fs.mkdir(path.join(ROOT, 'data', 'raw'), { recursive: true });
 await fs.writeFile(path.join(ROOT, 'data', 'raw', 'remember-api.json'), JSON.stringify(raw, null, 2), 'utf8');

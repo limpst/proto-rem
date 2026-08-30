@@ -54,26 +54,47 @@
     return origSend.apply(this, a);
   };
 
+  /* 실제 응답에서 name 은 {first,last}, phone 은 {national_number,...} 객체로 온다.
+     회사명만 있고 이름이 없는 항목은 명함이 아니라 회사 자동완성 후보라 버린다. */
+  const flatName = v => typeof v === 'string' ? v.trim()
+    : (v && typeof v === 'object' ? [v.last, v.first].filter(Boolean).join(' ').trim() : '');
+
+  const flatPhone = (v) => {
+    if (typeof v === 'string') return v.trim();
+    if (!v || typeof v !== 'object') return '';
+    const n = String(v.national_number ?? v.normalized_number ?? '').replace(/\D/g, '');
+    if (!n) return '';
+    if (n.length === 11) return `${n.slice(0,3)}-${n.slice(3,7)}-${n.slice(7)}`;
+    if (n.length === 10) return `${n.slice(0,3)}-${n.slice(3,6)}-${n.slice(6)}`;
+    return n;
+  };
+
+  const str = v => typeof v === 'string' ? v.trim() : '';
+
   const normalize = () => {
     const found = [];
     raw.forEach(r => harvest(r.body, found));
     const seen = new Set();
     const cards = [];
-    found.forEach((c, i) => {
-      const key = `${c.name ?? ''}|${c.company ?? c.companyName ?? ''}|${c.mobile ?? c.phone ?? ''}`;
-      if (key === '||' || seen.has(key)) return;
+    found.forEach((c) => {
+      const name = flatName(c.name);
+      if (!name) return;
+      const company = str(c.company) || str(c.companyName);
+      const phone = flatPhone(c.phone ?? c.mobile);
+      const key = `${name}|${company}|${phone}`;
+      if (seen.has(key)) return;
       seen.add(key);
       cards.push({
-        id: `r${String(i).padStart(4, '0')}`,
-        name: c.name ?? '',
-        title: c.position ?? c.title ?? '',
-        company: c.company ?? c.companyName ?? '',
-        dept: c.department ?? '',
-        email: c.email ?? '',
-        phone: c.mobile ?? c.phone ?? '',
-        site: c.homepage ?? c.website ?? '',
+        id: `r${String(cards.length).padStart(4, '0')}`,
+        name,
+        title: str(c.position) || str(c.title),
+        company,
+        dept: str(c.department),
+        email: str(c.email),
+        phone,
+        site: str(c.homepage) || str(c.website),
         met_at: '명함 교환',
-        note: c.memo ?? '',
+        note: str(c.memo),
       });
     });
     return cards;
@@ -98,17 +119,39 @@
     <div id="pr-stat" style="color:#9aa4b6;font-size:12px;margin-bottom:10px">API 0건 · 명함 0건</div>
     <div style="color:#9aa4b6;font-size:11.5px;margin-bottom:10px">
       명함 목록을 아래로 끝까지 스크롤하세요. 불러온 만큼 아래 숫자가 올라갑니다.</div>
-    <button id="pr-save" style="width:100%;background:#4f8cff;color:#fff;border:0;border-radius:8px;
-      padding:9px;font-weight:600;cursor:pointer;font-family:inherit">JSON 저장</button>
+    <button id="pr-send" style="width:100%;background:#4f8cff;color:#fff;border:0;border-radius:8px;
+      padding:9px;font-weight:600;cursor:pointer;font-family:inherit">대시보드로 바로 보내기</button>
+    <button id="pr-save" style="width:100%;margin-top:6px;background:transparent;color:#9aa4b6;
+      border:1px solid #2a2f3a;border-radius:8px;padding:7px;cursor:pointer;font-family:inherit;font-size:12px">
+      JSON 파일로 저장</button>
     <button id="pr-raw" style="width:100%;margin-top:6px;background:transparent;color:#9aa4b6;
       border:1px solid #2a2f3a;border-radius:8px;padding:7px;cursor:pointer;font-family:inherit;font-size:12px">
-      원본 응답도 저장 (명함 0건일 때)</button>`;
+      원본 응답 저장 (명함 0건일 때)</button>`;
   document.body.appendChild(box);
+
+  // 대시보드 주소. 스니펫을 불러온 서버를 그대로 쓰고, 없으면 기본 포트를 쓴다.
+  const DASH = window.__protoRemDash ?? 'http://localhost:8787';
 
   function update() {
     const el = box.querySelector('#pr-stat');
     if (el) el.textContent = `API ${raw.length}건 · 명함 ${normalize().length}건`;
   }
+
+  box.querySelector('#pr-send').onclick = async () => {
+    const cards = normalize();
+    if (!cards.length) { alert('아직 수집된 명함이 없습니다. 명함 목록 페이지에서 스크롤해 주세요.'); return; }
+    try {
+      const r = await fetch(`${DASH}/api/upload-cards`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cards }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      alert(`명함 ${cards.length}건을 대시보드로 보냈습니다.\n${DASH} 에서 확인하세요.`);
+    } catch (e) {
+      alert(`대시보드로 보내지 못했습니다 (${e.message}).\n서버가 켜져 있는지 확인하거나, 아래 [JSON 파일로 저장]을 쓰세요.`);
+    }
+  };
 
   box.querySelector('#pr-save').onclick = () => {
     const cards = normalize();

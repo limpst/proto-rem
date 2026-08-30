@@ -17,6 +17,7 @@ import {
 } from './generate.mjs';
 import { resolveBackend } from './llm.mjs';
 import { sendEmail, smtpStatus } from './deliver.mjs';
+import { toCards } from './normalize.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = process.env.PORT || 5173;
@@ -42,6 +43,13 @@ const readBody = req => new Promise(r => {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
+
+  // 리멤버 페이지(card.rememberapp.co.kr)에 붙여넣은 스니펫이 이 서버로 직접
+  // 명함을 보낼 수 있어야 하므로 CORS 를 연다. 로컬 전용 도구라 허용 범위를 넓게 둔다.
+  res.setHeader('access-control-allow-origin', '*');
+  res.setHeader('access-control-allow-headers', 'content-type');
+  res.setHeader('access-control-allow-methods', 'GET,POST,OPTIONS');
+  if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
   try {
     if (p === '/api/state') {
@@ -99,8 +107,10 @@ const server = http.createServer(async (req, res) => {
 
     // --- 1-c. 콘솔 스니펫으로 받은 cards.json 업로드 ----------------------
     if (p === '/api/upload-cards' && req.method === 'POST') {
-      const { cards } = await readBody(req);
-      if (!Array.isArray(cards) || !cards.length) return json(res, 400, { error: '명함 배열이 비어 있습니다' });
+      const body = await readBody(req);
+      // 구버전 스니펫이 name/phone 을 객체 그대로 보낼 수 있으므로 서버에서도 정규화한다.
+      const cards = toCards(body.cards ?? []);
+      if (!cards.length) return json(res, 400, { error: '이름이 있는 명함이 없습니다' });
       // 업로드본을 반출본과 같은 자리에 두어 이후 [명함 불러오기]가 그대로 읽게 한다.
       fs.mkdirSync(path.join(ROOT, 'data'), { recursive: true });
       fs.writeFileSync(path.join(ROOT, 'data', 'cards.json'), JSON.stringify(cards, null, 2), 'utf8');
@@ -197,7 +207,11 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/selection' && req.method === 'POST') {
       const { ids } = await readBody(req);
-      return json(res, 200, update(st => { st.selection = ids ?? []; }));
+      return json(res, 200, update(st => {
+        // 자사(에이톰) 명함은 어떤 경로로도 발송 대상이 되지 않게 서버에서 막는다.
+        const internal = new Set(st.cards.filter(c => c.segmentId === 'internal').map(c => c.id));
+        st.selection = (ids ?? []).filter(id => !internal.has(id));
+      }));
     }
 
     // --- 5. 생성 --------------------------------------------------------

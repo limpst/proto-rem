@@ -77,12 +77,15 @@ const cardRows = cards => !cards.length ? '<div class="muted">명함이 없습�
     <th style="width:26px"></th><th>담당자</th><th>회사</th><th>고객군</th><th>리서치 근거</th>
   </tr></thead><tbody>
   ${cards.map(c => `<tr>
-    <td><input type="checkbox" class="pick" value="${c.id}" ${S.selection.includes(c.id) ? 'checked' : ''}></td>
+    <td>${c.segmentId === 'internal' ? ''
+      : `<input type="checkbox" class="pick" value="${c.id}" ${S.selection.includes(c.id) ? 'checked' : ''}>`}</td>
     <td><b>${esc(c.name)}</b><div class="muted" style="font-size:11.5px">${esc(c.title)}</div></td>
     <td>${esc(c.company)}<div class="muted" style="font-size:11.5px">${esc(c.siteUrl || c.site) || '홈페이지 없음'}</div></td>
-    <td>${c.segmentId && c.segmentId !== 'unclassified'
-      ? `<span class="tag seg">${esc(seg(c.segmentId)?.label ?? c.segmentId)}</span>`
-      : '<span class="tag">미분류</span>'}</td>
+    <td>${c.segmentId === 'internal'
+      ? '<span class="tag" style="border-color:#5a4415;color:var(--warn)">자사 · 발송제외</span>'
+      : c.segmentId && c.segmentId !== 'unclassified'
+        ? `<span class="tag seg">${esc(seg(c.segmentId)?.label ?? c.segmentId)}</span>`
+        : '<span class="tag">미분류</span>'}</td>
     <td>${c.signals?.facts?.length
       ? `<ul class="facts">${c.signals.facts.map(f => `<li>${esc(f)}</li>`).join('')}</ul>`
       : `<span class="muted" style="font-size:11.5px">${c.siteFetch ? `수집 실패 (${esc(c.siteFetch.reason)})` : '미수집'}</span>`}</td>

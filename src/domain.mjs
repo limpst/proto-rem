@@ -87,7 +87,18 @@ export const SEGMENTS = [
   },
 ];
 
+/** 회사명 비교용 정규화: ㈜, (주), 주식회사, 공백을 지운다. */
+const normCo = s => String(s ?? '')
+  .replace(/㈜|\(주\)|주식회사|\(유\)|유한회사/g, '')
+  .replace(/\s+/g, '')
+  .toLowerCase();
+
+const OWN_CO = normCo(COMPANY.name);
+
 export function classify(card) {
+  // 자사 명함(에이톰 임직원)은 발송 대상이 아니다. 명함첩에는 당연히 섞여 있다.
+  if (normCo(card.company) === OWN_CO) return { segmentId: 'internal', score: 0 };
+
   const hay = `${card.company} ${card.dept ?? ''} ${card.title ?? ''} ${card.note ?? ''}`;
   let best = null, bestScore = 0;
   for (const seg of SEGMENTS) {
