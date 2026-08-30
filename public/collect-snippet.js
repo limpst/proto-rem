@@ -130,7 +130,8 @@
   document.body.appendChild(box);
 
   // 대시보드 주소. 스니펫을 불러온 서버를 그대로 쓰고, 없으면 기본 포트를 쓴다.
-  const DASH = window.__protoRemDash ?? 'http://localhost:8787';
+  // 기본값은 로컬 서버. [스니펫 복사]로 받은 코드에는 실제 대시보드 주소가 앞줄에 박혀 온다.
+  const DASH = window.__protoRemDash ?? 'http://localhost:5173';
 
   function update() {
     const el = box.querySelector('#pr-stat');

@@ -84,7 +84,7 @@ for (const s of steps) {
   await p.waitForTimeout(250);
   await p.$$eval('details', ds => ds.forEach(d => { d.open = true; })).catch(() => {});
   const rows = await p.$$eval('main button, main .opt', els => els.map(e => ({
-    t: (e.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 34), has: !!e.getAttribute('title'),
+    t: (e.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 34), has: !!(e.getAttribute('title') || e.dataset.tip),
   }))).catch(() => []);
   rows.filter(r => !r.has && r.t).forEach(r => noTitle.push(`S${s.n} ${r.t}`));
 }
@@ -99,5 +99,15 @@ for (const [k, v] of err) {
   seen.add(key);
   say(`[${k}] ${v}`);
 }
+
+// 실제 툴팁이 뜨는지 확인
+await p.click('.step[data-n="1"]', { timeout: 8000 }).catch(() => {});
+await p.waitForTimeout(300);
+const btn = p.locator('main button[data-tip]').first();
+await btn.hover();
+await p.waitForTimeout(500);
+const tip = await p.$eval('.tip', el => (el.hidden ? null : el.textContent)).catch(() => null);
+say('===== 툴팁 표시 확인 =====');
+say(tip ? 'OK: ' + tip.slice(0, 90) : 'X: 툴팁이 뜨지 않음');
 
 await b.close();

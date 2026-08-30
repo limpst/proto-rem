@@ -4,21 +4,124 @@ let viewStep = 1;
 let promptPreview = null;
 const openPrompts = new Set();
 
+/* 입력값은 DOM 이 아니라 여기에 둔다.
+   run() 은 동작을 시작하기 전에 render(진행중) 로 #todo·#view 를 갈아엎는다.
+   그래서 동작 함수가 그때 가서 $('#ch')/$('#paste') 를 읽으면 이미 없다.
+   (이 때문에 [메일 만들기]는 늘 "Cannot read properties of null",
+    [붙여넣은 내용으로 명함 만들기]는 늘 "붙여넣은 내용이 없습니다" 로 끝났다.)
+   값을 여기에 들고 있으면 다시 그려도 살아남는다. */
+let channel = 'email';
+let pasteText = '';
+
+/* ── 시스템 로그 ─────────────────────────────────────────────
+   화면 하단 접힘 콘솔(#console). 어떤 호출이 언제 무엇을 돌려줬는지 남긴다.
+   무엇이 왜 안 됐는지를 사용자가 스스로 볼 수 있어야 한다. */
+const LOGS = [];
+let logFilter = 'all';
+
+function log(kind, tag, msg, detail) {
+  LOGS.push({ t: new Date(), kind, tag, msg, detail });
+  if (LOGS.length > 500) LOGS.shift();
+  paintLogs();
+}
+
+const hhmmss = d => d.toTimeString().slice(0, 8);
+const esc0 = t => String(t ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+const LOG_FILTERS = [
+  ['all', '전체'], ['net', '통신'], ['ai', 'AI'], ['ui', '조작'], ['error', '오류'],
+];
+
+function paintLogs() {
+  const box = document.querySelector('#conLogs');
+  if (!box) return;
+  const count = document.querySelector('#conCount');
+  const last = document.querySelector('#conLast');
+  const tools = document.querySelector('#conTools');
+
+  const errs = LOGS.filter(l => l.kind === 'error').length;
+  if (count) count.textContent = errs ? `${LOGS.length} · 오류 ${errs}` : String(LOGS.length);
+  if (last) {
+    const l = LOGS[LOGS.length - 1];
+    last.textContent = l ? `${hhmmss(l.t)}  ${l.msg}` : '대기 중…';
+    last.style.color = l?.kind === 'error' ? 'var(--bad)' : '';
+  }
+
+  if (tools) {
+    tools.innerHTML = LOG_FILTERS.map(([k, lb]) =>
+      `<span class="filt ${logFilter === k ? 'on' : ''}" data-lf="${k}">${lb}</span>`).join('')
+      + '<span class="filt" data-lf="clear" style="margin-left:auto">지우기</span>';
+    tools.querySelectorAll('[data-lf]').forEach(b => {
+      b.onclick = e => {
+        e.stopPropagation();
+        if (b.dataset.lf === 'clear') LOGS.length = 0; else logFilter = b.dataset.lf;
+        paintLogs();
+      };
+    });
+  }
+
+  const rows = LOGS.filter(l => logFilter === 'all' || l.kind === logFilter);
+  box.innerHTML = rows.slice(-250).reverse().map(l => `
+    <div class="lg ${l.kind}">
+      <span class="tm">${hhmmss(l.t)}</span>
+      <span class="tg">${esc0(l.tag)}</span>
+      <span class="mg">${esc0(l.msg)}${l.detail ? `<span class="mt">  ${esc0(l.detail)}</span>` : ''}</span>
+    </div>`).join('') || '<div class="mg" style="padding:10px 4px;color:#5b6577">기록 없음</div>';
+}
+
+function initConsole() {
+  const con = document.querySelector('#console');
+  const bar = document.querySelector('#conbar');
+  if (!con || !bar || bar.dataset.ready) return;
+  bar.dataset.ready = '1';
+  bar.onclick = () => con.classList.toggle('open');
+  paintLogs();
+}
+
+/** API 경로를 사람이 읽는 이름으로 */
+const API_LABEL = {
+  '/api/state': '상태 조회', '/api/ingest': '명함 불러오기', '/api/reset': '초기화',
+  '/api/paste-cards': '붙여넣기 파싱', '/api/upload-cards': '파일 업로드',
+  '/api/remember-export': '리멤버 반출', '/api/remember-login': '리멤버 로그인 창',
+  '/api/source-profile': '자사 홈페이지 분석', '/api/mode': '발신 설정',
+  '/api/resolve-sites': '홈페이지 자동 찾기', '/api/set-site': '홈페이지 입력',
+  '/api/enrich': '홈페이지 리서치', '/api/prompt-preview': '프롬프트 미리보기',
+  '/api/segment': '고객군 분류', '/api/selection': '대상 선택', '/api/exclude': '명함 제외',
+  '/api/generate': '메일 생성', '/api/review': '검토 반영', '/api/deliver': '발송',
+};
+
 const api = async (p, body) => {
+  const t0 = Date.now();
+  const label = API_LABEL[p] ?? p;
   let r;
   try {
     r = await fetch(p, body
       ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
       : { method: 'GET' });
   } catch (e) {
+    log('error', '통신', `${label} — 서버에 연결하지 못했습니다`, e.message);
     return { error: `서버에 연결하지 못했습니다.
 ${e.message}` };
   }
   // 서버가 500 을 HTML 로 뱉는 경우가 있어 무조건 JSON 으로 믿지 않는다.
   const txt = await r.text();
-  try { return JSON.parse(txt); }
-  catch { return { error: `서버 응답을 해석하지 못했습니다 (HTTP ${r.status})
-${txt.slice(0, 300)}` }; }
+  const ms = Date.now() - t0;
+  try {
+    const j = JSON.parse(txt);
+    if (j?.error) log('error', '통신', `${label} 실패 — ${j.error}`, `${ms}ms`);
+    else if (p !== '/api/state') {
+      // 모델을 호출하는 단계는 별도 색으로 구분해 둔다 (오래 걸리는 이유가 보이게)
+      const isAi = ['/api/generate', '/api/enrich', '/api/segment',
+                    '/api/source-profile', '/api/resolve-sites'].includes(p);
+      log(isAi ? 'ai' : 'net', isAi ? 'AI' : '통신', label, `${ms}ms`);
+    }
+    return j;
+  } catch {
+    log('error', '통신', `${label} — 응답 해석 실패 (HTTP ${r.status})`, txt.slice(0, 200));
+    return { error: `서버 응답을 해석하지 못했습니다 (HTTP ${r.status})
+${txt.slice(0, 300)}` };
+  }
 };
 
 /* 응답을 화면 상태 S 에 반영한다.
@@ -36,6 +139,7 @@ const post = async (p, body) => adopt(await api(p, body));
 
 const run = async (label, fn) => {
   if (busy || !fn) return;
+  log('ui', '조작', label);
   busy = true;
   try {
     render(label);
@@ -48,6 +152,25 @@ const run = async (label, fn) => {
     render();
   }
 };
+
+/* 리멤버 자동화(전용 크롬 창·CDP 접속)는 이 서버가 사용자의 PC 에서 돌 때만 뜻이 있다.
+   배포본(onrender.com)에서 누르면 서버 쪽에서 크롬을 띄우려다 실패할 뿐이다. */
+const isLocal = () => ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+
+/* 클립보드는 권한·컨텍스트에 따라 막힌다. 실패하면 조용히 죽지 않고 대안을 준다. */
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); return true; } catch { /* 아래로 */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = t;
+    ta.style.cssText = 'position:fixed;top:-9999px;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch { return false; }
+}
 
 const seg = id => (S.segments ?? []).find(s => s.id === id);
 const esc = t => String(t ?? '')
@@ -275,6 +398,7 @@ const T = {
   siteIn: '홈페이지 주소를 직접 넣습니다. 입력 칸을 벗어나면 바로 저장됩니다.',
   pickOne: '이 명함을 발송 대상에 넣거나 뺍니다. 자사·제외 명함은 서버에서도 걸러집니다.',
   drop: '리멤버에서 받은 cards.json 파일을 올립니다. 기존 명함 목록은 대체됩니다.',
+  remote: '이 기능은 프로그램을 내 PC 에서 직접 실행할 때만 동작합니다. 지금은 배포 서버에 접속 중이라, 눌러도 서버 쪽에서 크롬을 열려다 실패합니다. 아래 [붙여넣기]나 cards.json 업로드를 쓰세요.',
 };
 
 /* 각 단계의 주 버튼 — "지금 할 일" 상자 안에 둔다 */
@@ -295,7 +419,8 @@ const PRIMARY = {
   generate: x => `<div class="row">
       <select id="ch" title="${T.channel}"
         style="background:var(--sunk);color:var(--tx);border:1px solid var(--line);border-radius:7px;padding:8px 10px">
-        <option value="email">이메일</option><option value="sms">문자(LMS)</option><option value="remember">리멤버 메시지</option>
+        ${[['email', '이메일'], ['sms', '문자(LMS)'], ['remember', '리멤버 메시지']]
+          .map(([v, l]) => `<option value="${v}" ${channel === v ? 'selected' : ''}>${l}</option>`).join('')}
       </select>
       <button data-act="generate" ${x.selected ? '' : 'disabled'}
         title="${x.selected ? T.generate : '발송 대상이 없습니다. STEP 4 에서 먼저 고르세요.'}">메일 만들기 (${x.selected}건)</button></div>`,
@@ -435,6 +560,10 @@ const VIEWS = {
     <details class="panel" ${S.cards?.length ? '' : 'open'}>
       <summary>리멤버에서 가져오는 방법 3가지 — 처음이라면 펼쳐 보세요</summary>
       <div class="body">
+        ${isLocal() ? '' : `<div class="banner info">
+          지금은 <b>배포 서버</b>에 접속 중입니다. 아래 <b>방법 ①·③</b>(전용 크롬 창 · CDP)은
+          프로그램을 내 PC 에서 직접 실행할 때만 동작하므로 잠겨 있습니다.
+          <b>방법 ② 콘솔 스니펫</b>과 <b>붙여넣기</b>는 그대로 쓸 수 있습니다.</div>`}
         <div class="cap">방법 ② 콘솔 스니펫 <span class="tag ok">가장 쉬움</span></div>
         <ol class="muted" style="font-size:12.5px;margin:0 0 10px;padding-left:18px;line-height:1.95">
           <li>쓰시던 크롬에서 <code>card.rememberapp.co.kr</code> 접속 (로그인 상태 그대로)</li>
@@ -453,14 +582,17 @@ const VIEWS = {
           평소 크롬은 건드리지 않습니다.<br>
           <span style="color:var(--warn)">구글 로그인은 자동화 창에서 차단됩니다. 네이버·카카오를 쓰세요.</span></div>
         <div class="row">
-          <button class="ghost sm" data-act="rlogin" title="${T.rlogin}">브라우저 열어 로그인</button>
-          <button class="ghost sm" data-act="rexport" title="${T.rexport}">전부 가져오기</button>
+          <button class="ghost sm" data-act="rlogin" ${isLocal() ? '' : 'disabled'}
+            title="${isLocal() ? T.rlogin : T.remote}">브라우저 열어 로그인</button>
+          <button class="ghost sm" data-act="rexport" ${isLocal() ? '' : 'disabled'}
+            title="${isLocal() ? T.rexport : T.remote}">전부 가져오기</button>
         </div>
 
         <div class="cap" style="margin-top:18px">방법 ③ CDP 접속 <span class="tag">크롬 재시작 필요</span></div>
         <pre style="margin-top:0">Get-Process chrome | Stop-Process -Force
 &amp; "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9222</pre>
-        <div class="row" style="margin-top:9px"><button class="ghost sm" data-act="rexportcdp" title="${T.rexportcdp}">CDP 로 가져오기</button></div>
+        <div class="row" style="margin-top:9px"><button class="ghost sm" data-act="rexportcdp" ${isLocal() ? '' : 'disabled'}
+          title="${isLocal() ? T.rexportcdp : T.remote}">CDP 로 가져오기</button></div>
       </div>
     </details>
 
@@ -482,7 +614,7 @@ atom@atom-eng.co.kr
 010-8247-2177"
           style="width:100%;min-height:150px;background:var(--sunk);border:1px solid var(--line);
           color:var(--tx);border-radius:8px;padding:11px;font-size:12.5px;line-height:1.7;
-          font-family:ui-monospace,Consolas,monospace"></textarea>
+          font-family:ui-monospace,Consolas,monospace">${esc(pasteText)}</textarea>
         <div class="row" style="margin-top:9px"><button data-act="paste" title="${T.paste}">붙여넣은 내용으로 명함 만들기</button></div>
       </div>
     </details>
@@ -703,7 +835,6 @@ function bind() {
     deliver: () => api('/api/deliver', { confirm: false }),
 
     generate: async () => {
-      const channel = $('#ch').value;
       let r = await api('/api/generate', { channel, batch: 1, restart: true });
       let guard = 0;
       while (r?.remaining > 0 && guard++ < 300) {
@@ -748,17 +879,28 @@ function bind() {
       return api('/api/state');
     },
     paste: async () => {
-      const t = $('#paste')?.value ?? '';
+      const t = pasteText;
       if (!t.trim()) { alert('붙여넣은 내용이 없습니다.'); return api('/api/state'); }
       const r = await api('/api/paste-cards', { text: t });
       if (r.error) { alert(r.error); return api('/api/state'); }
       alert(`명함 ${(r.cards ?? []).length}건을 만들었습니다. (${r.parsedAs === 'table' ? '표 형식' : '덩어리 텍스트'}로 인식)`);
+      pasteText = '';
       return r;
     },
     copysnippet: async () => {
-      const code = await (await fetch('/collect-snippet.js')).text();
-      await navigator.clipboard.writeText(code);
-      alert('복사했습니다.\n\ncard.rememberapp.co.kr 에서 F12 → Console 에 붙여넣으세요.');
+      // 스니펫은 리멤버 페이지에서 실행되므로 이 대시보드 주소를 스스로 알 수 없다.
+      // 복사 시점에 현재 주소를 앞줄에 박아 준다. (기본값 localhost 로는 배포본에 못 붙는다)
+      const raw = await (await fetch('/collect-snippet.js')).text();
+      const code = `window.__protoRemDash = ${JSON.stringify(location.origin)};\n${raw}`;
+      if (await copyText(code)) {
+        alert(`복사했습니다.\n\ncard.rememberapp.co.kr 에서 F12 → Console 에 붙여넣으세요.\n`
+          + `보낼 주소로 ${location.origin} 이 함께 들어갔습니다.`);
+      } else {
+        window.open('/collect-snippet.js', '_blank');
+        alert('클립보드가 막혀 있어 스니펫 원문을 새 탭으로 열었습니다.\n'
+          + 'Ctrl+A → Ctrl+C 로 복사한 뒤, 콘솔 첫 줄에\n'
+          + `window.__protoRemDash = "${location.origin}";\n을 먼저 입력해 주세요.`);
+      }
       return api('/api/state');
     },
   };
@@ -818,6 +960,11 @@ function bind() {
     };
   });
 
+  const chSel = $('#ch');
+  if (chSel) { chSel.value = channel; chSel.onchange = () => { channel = chSel.value; }; }
+  const pasteBox = $('#paste');
+  if (pasteBox) pasteBox.oninput = () => { pasteText = pasteBox.value; };
+
   const drop = $('#drop'), file = $('#file');
   if (drop && file) {
     drop.onclick = () => file.click();
@@ -844,4 +991,10 @@ async function upload(f) {
   render();
 }
 
-(async () => { await post('/api/state'); render(); })();
+(async () => {
+  initConsole();
+  log('ok', '시작', `proto-rem 콘솔 · ${location.host}`);
+  await post('/api/state');
+  render();
+  initConsole();   // render 가 DOM 을 갈아엎어도 콘솔 바는 살아 있어야 한다
+})();

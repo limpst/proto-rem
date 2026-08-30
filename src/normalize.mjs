@@ -144,12 +144,14 @@ export function toCards(found) {
       name,
       title: str(c.position) || str(c.title),
       company,
-      dept: str(c.department),
+      dept: str(c.department) || str(c.dept),
       email: str(c.email),
       phone,
-      site: str(c.homepage) || str(c.website),
-      met_at: '명함 교환',
-      note: str(c.memo),
+      // 이 프로그램이 내보낸 cards.json 을 다시 올리는 경로가 있다(드래그 업로드·스니펫).
+      // c.site 를 보지 않으면 그때마다 홈페이지 주소가 통째로 날아간다.
+      site: str(c.site) || str(c.homepage) || str(c.website),
+      met_at: str(c.met_at) || '명함 교환',
+      note: str(c.memo) || str(c.note),
     });
   }
   return cards;
