@@ -1144,13 +1144,32 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
         if not targets:
             return 400, {"error": "발송 대상이 없습니다. STEP 4 에서 먼저 선택하세요."}
 
+        # 승인된 문안은 사람이 읽고 손본 결과다. 다시 만들기로 덮어쓰면
+        # 그 검토가 통째로 사라진다. 명시적으로 force 를 주지 않는 한 지킨다.
+        keep = {c["id"] for c in targets
+                if (c.get("message") or {}).get("reviewStatus") == "APPROVED"}
+        if restart and not body.get("force"):
+            targets_before = len(targets)
+            targets = [c for c in targets if c["id"] not in keep]
+            if keep:
+                L.log("warn", "generate",
+                      f"승인된 {len(keep)}건은 다시 만들지 않습니다 (전체 {targets_before}건 중)")
+
         if restart:
             st["templates"] = {}
             for c in targets:
+                if c["id"] in keep:
+                    continue
                 c.pop("message", None)
             store.save(st)
 
         mode = st.get("mode")
+        if not restart:
+            # 아직 문안이 없는 대상만 만든다. 매번 전부 다시 만들 이유가 없다.
+            targets = [c for c in targets if not c.get("message")]
+            if not targets:
+                return 200, full_state(store.load(), nothingToDo=True)
+
         total = (len({c.get("segmentId") for c in targets if c.get("segmentId")})
                  if mode == "1:N" else len(targets))
         jid = _job_new("generate", total)

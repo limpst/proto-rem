@@ -606,13 +606,27 @@ const PRIMARY = {
       <button class="ghost" data-act="segmentai" title="${T.segmentai}">AI 로 마저 분류</button>
       <button class="ghost" data-act="interests" ${x.usable.length ? '' : 'disabled'} title="${T.interests}">관심사 추정</button>
       ${x.classified ? '<span class="muted" style="font-size:12px">아래 표에서 체크박스로 대상을 고르세요</span>' : ''}</div>`,
-  generate: x => `<div class="row">
+  generate: x => {
+    const done = (S.cards ?? []).filter(c => (S.selection ?? []).includes(c.id) && c.message).length;
+    const todo = x.selected - done;
+    const approved = (S.cards ?? []).filter(c =>
+      (S.selection ?? []).includes(c.id) && c.message?.reviewStatus === 'APPROVED').length;
+    return `<div class="row">
       <select id="ch" title="${T.channel}">
         <option value="email">이메일</option><option value="sms">문자(LMS)</option><option value="remember">리멤버 메시지</option>
       </select>
-      <button data-act="generate" ${x.selected ? '' : 'disabled'}
-        title="${x.selected ? T.generate : '발송 대상이 없습니다. STEP 4 에서 먼저 고르세요.'}">메일 만들기 (${x.selected}건)</button>
-      ${pickedCopy.size ? `<span class="tag seg">문구 ${pickedCopy.size}개 반영됨</span>` : ''}</div>`,
+      <button data-act="generate" ${todo > 0 ? '' : 'disabled'}
+        title="${todo > 0
+          ? `아직 문안이 없는 ${todo}건만 만듭니다. 이미 만든 문안은 건드리지 않습니다.`
+          : '선택한 대상의 문안이 이미 다 있습니다. 다시 만들려면 오른쪽 [전부 다시 만들기] 를 쓰세요.'}">
+        새로 만들 것만 (${todo > 0 ? todo : 0}건)</button>
+      <button class="ghost" data-act="generate-all" ${x.selected ? '' : 'disabled'}
+        title="선택한 ${x.selected}건을 전부 다시 만듭니다.${approved ? ` 승인된 ${approved}건은 보호되어 그대로 둡니다.` : ''}">
+        전부 다시 만들기 (${x.selected}건)</button>
+      ${done ? `<span class="tag">이미 ${done}건 있음</span>` : ''}
+      ${approved ? `<span class="tag ok" title="승인된 문안은 다시 만들기에서도 덮어쓰지 않습니다">승인 ${approved}건 보호</span>` : ''}
+      ${pickedCopy.size ? `<span class="tag seg">문구 ${pickedCopy.size}개 반영됨</span>` : ''}</div>`;
+  },
   review: () => '',
   deliver: x => `<div class="row">
       <button class="ghost" data-act="deliver" ${x.approved ? '' : 'disabled'}
@@ -1965,7 +1979,19 @@ function bind() {
     generate: async ctx => {
       // 서버가 작업 번호만 주고 즉시 끝나므로, 여기서 진행률을 물어보며 기다린다.
       // 예전에는 요청 하나가 5분 넘게 붙잡혀 브라우저가 먼저 끊었다.
-      await runJob('/api/generate', { channel: ctx.channel, restart: true }, '메일 만드는 중');
+      const r = await runJob('/api/generate', { channel: ctx.channel }, '메일 만드는 중');
+      if (r?.nothingToDo) toast('새로 만들 문안이 없습니다. 선택한 대상은 이미 다 있습니다.');
+      return null;
+    },
+
+    'generate-all': async ctx => {
+      const n = (S.cards ?? []).filter(c => (S.selection ?? []).includes(c.id) && c.message).length;
+      if (n && !confirm(`선택한 대상의 문안을 전부 다시 만듭니다.
+기존 초안 ${n}건은 새 문안으로 바뀝니다.
+(승인된 건은 보호되어 그대로 둡니다)
+
+계속할까요?`)) return null;
+      await runJob('/api/generate', { channel: ctx.channel, restart: true }, '전부 다시 만드는 중');
       return null;
     },
 
@@ -2658,7 +2684,9 @@ const SC_RUN = {
   },
 
   async generate() {
-    await runJob('/api/generate', { channel: 'email', restart: true }, 'STEP 5 · 문구 생성');
+    // 이미 문안이 있는 대상은 다시 만들지 않는다. 반복 실행이 기존 결과를 갈아엎으면
+    // 시나리오를 한 번 더 돌릴 때마다 사람이 손본 문안이 사라진다.
+    await runJob('/api/generate', { channel: 'email' }, 'STEP 5 · 문구 생성');
     const x = stats();
     if (!x.drafted && !x.held) throw new Error('문안이 하나도 만들어지지 않았습니다.');
     const sector = (S.cards ?? []).filter(c => c.message?.kind === 'sector').length;
