@@ -28,6 +28,7 @@ from urllib.parse import parse_qs, urlparse
 from . import classify_ai, copy_ai, deliver, enrich, generate, llm, normalize, resolve
 from . import sector_fallback as SF
 from . import upsert as UP
+from . import paths
 from . import store
 from . import log as L
 from .domain import COMPANY, PERSONAS, SEGMENTS, classify
@@ -37,7 +38,9 @@ from .env import settings_view, write_env
 
 ROOT = Path(__file__).resolve().parent.parent
 PUBLIC = ROOT / "public"
-DATA = ROOT / "data"
+# 업로드본은 살아남아야 하고, 시드는 저장소에 커밋된 읽기 전용 자산이다.
+DATA = paths.STATE
+ASSETS = paths.ASSETS
 PORT = int(os.environ.get("PORT", 5173))
 
 STEPS = [
@@ -115,6 +118,8 @@ def full_state(st: dict, **extra) -> dict:
     return {**st, "steps": STEPS, "segments": SEGMENTS, "company": COMPANY,
             "personas": PERSONAS, "copyKinds": copy_ai.KINDS, "copyTones": copy_ai.TONES,
             "backend": llm.resolve_backend(), "smtp": deliver.smtp_status(),
+            # 데이터가 재배포를 견디는 자리에 있는지 화면이 사실대로 말할 수 있게 싣는다.
+            "storage": paths.describe(),
             "runtime": "python", **extra}
 
 
@@ -202,7 +207,7 @@ def route(path: str, method: str, body: dict, query: dict):
     # --- 1. 수집 ---------------------------------------------------------
     if path == "/api/ingest" and method == "POST":
         exported = DATA / "cards.json"
-        seed = DATA / "seed-cards.json"
+        seed = ASSETS / "seed-cards.json"
         src_file = exported if exported.exists() else seed
         if not src_file.exists():
             return 400, {"error": "가져올 명함 파일이 없습니다 (data/cards.json). 붙여넣기나 스니펫을 먼저 쓰세요."}

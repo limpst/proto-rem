@@ -17,8 +17,12 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from . import paths
+
 ROOT = Path(__file__).resolve().parent.parent
-DATA = ROOT / "data"
+# 읽기 전용 자산(seed)과 살아남아야 할 상태(DB)는 자리가 다르다. paths.py 참고.
+ASSETS = paths.ASSETS
+DATA = paths.STATE
 DB_PATH = os.environ.get("DB_PATH") or str(DATA / "proto-rem.db")
 TENANT = os.environ.get("TENANT_ID", "atom-eng")
 
@@ -123,7 +127,7 @@ def load() -> dict:
 
     # 최초 실행이고 DB 가 비어 있으면 샘플 시드를 넣는다. 시드가 없으면 빈 상태로 시작.
     if not state["cards"] and not meta.get("__seeded"):
-        seed = DATA / "seed-cards.json"
+        seed = ASSETS / "seed-cards.json"
         if seed.exists():
             try:
                 state["cards"] = [{**c, "status": "NEW"} for c in json.loads(seed.read_text(encoding="utf-8"))]

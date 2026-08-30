@@ -359,7 +359,10 @@ function draw(loading) {
       ${noAi ? '⚠ 없음' : `${b.cloud ? '☁' : '🖥'} ${esc(b.name ?? '-')}`}</dd>
     <dt>메일</dt><dd style="color:${S.smtp?.configured ? (S.smtp.dryRun ? 'var(--warn)' : 'var(--ok)') : 'var(--tx3)'}">
       ${S.smtp?.configured ? (S.smtp.dryRun ? '연습모드' : '발송가능') : '미설정'}</dd>
-    <dt>서버</dt><dd>${esc(S.runtime === 'python' ? 'Python' : 'Node')} · SQLite</dd>`;
+    <dt>서버</dt><dd>${esc(S.runtime === 'python' ? 'Python' : 'Node')} · SQLite</dd>
+    <dt>저장</dt><dd title="${esc(S.storage?.note ?? '')}${S.storage?.stateDir ? ' · ' + esc(S.storage.stateDir) : ''}"
+      style="color:${S.storage ? (S.storage.persistent ? 'var(--ok)' : 'var(--warn)') : 'var(--tx3)'}">
+      ${S.storage ? (S.storage.persistent ? '영구' : '⚠ 휘발성') : '-'}</dd>`;
 
   // 흐름도 — 어느 단계를 지나는지, 무슨 컴포넌트가 도는지 화면 위에 항상 보인다.
   const fd = document.querySelector('#flowdiag-slot');
@@ -1035,21 +1038,81 @@ atom@atom-eng.co.kr"
       </div>` : ''}
     <div class="panel">${cardRows(S.cards ?? [], { pick: false })}</div>`,
 
-  segment: () => `
+  segment: () => {
+    const cards = S.cards ?? [];
+    const sel = new Set(S.selection ?? []);
+    const segs = S.segments ?? [];
+
+    const inSeg = id => cards.filter(c => c.segmentId === id);
+    const unclassified = cards.filter(c => !c.excluded && c.segmentId === 'unclassified');
+    const internal = cards.filter(c => c.segmentId === 'internal');
+    const excluded = cards.filter(c => c.excluded);
+    const classified = segs.reduce((n, s) => n + inSeg(s.id).length, 0);
+
+    /* 고객군을 버튼 나열이 아니라 카드로 편다.
+       각 칸에 몇 명이 있고 무슨 이야기를 할 고객군인지 같이 보여야
+       "왜 이 사람에게 이 메일이 가는가" 를 고를 때 알 수 있다. */
+    const segCard = s => {
+      const list = inSeg(s.id);
+      const picked = list.filter(c => sel.has(c.id)).length;
+      const on = list.length && picked === list.length;
+      return `
+        <button class="opt ${on ? 'on' : ''}" data-pick="${s.id}" ${list.length ? '' : 'disabled'}
+          style="${list.length ? '' : 'opacity:.38'}"
+          title="${list.length ? `이 고객군 ${list.length}건을 발송 대상으로 선택합니다. 기존 선택은 대체됩니다.` : '해당하는 명함이 없습니다.'}">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+            <b style="margin:0;flex:1">${esc(s.label)}</b>
+            <span class="tag ${picked ? 'ok' : ''}" style="font-size:10.5px">
+              ${list.length ? (picked ? `${picked}/${list.length}` : `${list.length}`) : '0'}</span>
+          </div>
+          <span style="color:var(--tx3);font-size:11px;line-height:1.5">${esc(s.trigger)}</span>
+        </button>`;
+    };
+
+    const problemRow = (title, list, why, action) => !list.length ? '' : `
+      <div style="display:flex;gap:12px;align-items:flex-start;padding:11px 0;border-bottom:1px solid var(--line)">
+        <span class="tag warn" style="flex:none;margin-top:1px">${esc(title)} ${list.length}</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12.5px">${list.map(c => esc(c.name)).join(', ')}</div>
+          <div class="muted" style="font-size:11.5px;margin-top:3px">${why}</div>
+        </div>
+        ${action}
+      </div>`;
+
+    return `
     ${aiBanner()}
+
     <div class="panel">
-      <div class="cap">고객군을 한 번에 선택하기</div>
-      <div class="row">
-        ${(S.segments ?? []).map(s => {
-          const n = (S.cards ?? []).filter(c => c.segmentId === s.id).length;
-          return `<button class="ghost sm" data-pick="${s.id}" ${n ? '' : 'disabled'}
-            title="${n ? `이 고객군 ${n}건만 발송 대상으로 한 번에 선택합니다. 기존 선택은 대체됩니다.` : '이 고객군에 해당하는 명함이 없습니다.'}">${esc(s.label)}${n ? ` (${n})` : ''}</button>`;
-        }).join('')}
-        <button class="ghost sm" data-pick="all" title="${T.pickAll}">전체 선택</button>
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+        <div class="cap" style="margin:0">고객군 — 칸을 누르면 그 그룹 전체가 발송 대상이 됩니다</div>
+        <span style="flex:1"></span>
+        <button class="ghost sm" data-pick="all" title="${T.pickAll}">발송 가능 전체</button>
         <button class="ghost sm" data-pick="none" title="${T.pickNone}">선택 해제</button>
       </div>
+      <div class="grid2">${segs.map(segCard).join('')}</div>
     </div>
-    <div class="panel">${cardRows(S.cards ?? [])}</div>`,
+
+    ${(unclassified.length || internal.length || excluded.length) ? `
+    <div class="panel">
+      <div class="cap">발송 대상에서 빠진 명함 — 이유와 처리 방법</div>
+      ${problemRow('미분류', unclassified,
+        '회사 이름만으로는 업종을 알 수 없었습니다. AI 분류를 돌리거나, 표에서 고객군을 직접 골라 주세요.',
+        '<button class="sm" data-act="segmentai" style="flex:none">AI 로 분류</button>')}
+      ${problemRow('자사', internal,
+        '에이톰엔지니어링 소속이라 자동으로 제외됩니다. 우리 회사에 광고를 보내지 않기 위한 규칙입니다.', '')}
+      ${problemRow('제외됨', excluded,
+        '사람이 직접 제외한 명함입니다. 표의 [되돌리기] 로 되살릴 수 있습니다.', '')}
+    </div>` : ''}
+
+    <div class="panel">
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <div class="cap" style="margin:0">명함 ${cards.length}건 · 분류됨 ${classified}건 · 선택 ${sel.size}건</div>
+        <span style="flex:1"></span>
+        <span class="muted" style="font-size:11.5px">고객군은 표에서 직접 바꿀 수 있습니다</span>
+      </div>
+      ${cardRows(cards)}
+    </div>`;
+  },
 
   generate: () => aiBanner() + enginePanel() + copyStudio() + ((S.cards ?? []).filter(c => c.message).length
     ? '<div class="cap" style="margin:22px 0 10px;font-size:12px;color:var(--tx2);font-weight:600">만들어진 초안</div>'

@@ -9,8 +9,32 @@ import os
 import re
 from pathlib import Path
 
+from . import paths
+
 ROOT = Path(__file__).resolve().parent.parent
 _LINE = re.compile(r"^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$")
+
+
+def env_file() -> Path:
+    """.env 가 실제로 놓이는 자리.
+
+    영구 디스크를 쓰는 배포 환경에서는 그쪽에 둔다. 저장소 폴더에 두면
+    ⚙ 설정 화면에서 넣은 API 키·앱 비밀번호가 재배포마다 사라져,
+    매번 다시 넣어야 한다.
+
+    영구 자리에 아직 파일이 없고 저장소 쪽에만 있으면 한 번 옮겨 이어받는다.
+    영구 자리를 쓰지 않는 환경(로컬 개발)에서는 지금까지처럼 저장소 루트를 쓴다.
+    """
+    if not paths.PERSISTENT:
+        return ROOT / ".env"
+    p = paths.STATE / ".env"
+    old = ROOT / ".env"
+    if not p.exists() and old.exists():
+        try:
+            p.write_text(old.read_text(encoding="utf-8"), encoding="utf-8")
+        except OSError:
+            return old            # 옮기지 못하면 원래 자리를 그대로 쓴다
+    return p
 _cache: dict[str, str] | None = None
 
 
@@ -19,7 +43,7 @@ def _load() -> dict[str, str]:
     if _cache is not None:
         return _cache
     _cache = {}
-    f = ROOT / ".env"
+    f = env_file()
     if f.exists():
         for line in f.read_text(encoding="utf-8").splitlines():
             if line.lstrip().startswith("#"):
@@ -150,7 +174,7 @@ _MASK = "••••••••"
 def read_env_file() -> dict[str, str]:
     """.env 원문을 키-값으로 읽는다 (캐시를 거치지 않는다)."""
     out: dict[str, str] = {}
-    f = ROOT / ".env"
+    f = env_file()
     if f.exists():
         for line in f.read_text(encoding="utf-8").splitlines():
             if line.lstrip().startswith("#"):
@@ -195,7 +219,7 @@ def write_env(updates: dict[str, str]) -> dict:
     빈 문자열이 오면 해당 줄을 지운다(기본값으로 되돌리기).
     """
     global _cache
-    f = ROOT / ".env"
+    f = env_file()
     lines = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
     seen: set[str] = set()
     out: list[str] = []

@@ -7,6 +7,22 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m py.server
     healthCheckPath: /api/state
+
+    # --- 데이터 영구 저장 -------------------------------------------------
+    # 무료 플랜은 재배포마다 파일 시스템이 초기화된다. 그래서 SQLite 파일
+    # (data/proto-rem.db)이 통째로 사라지고 화면이 샘플 시드로 되돌아간다.
+    #
+    # 영구히 두려면 유료 플랜(Starter 이상)으로 올린 뒤 아래 3줄의 주석을 풀면 된다.
+    # 코드는 이미 /var/data 가 마운트돼 있으면 자동으로 그쪽에 저장한다(py/paths.py).
+    # 별도 환경변수도, 코드 수정도 필요 없다.
+    #
+    # disk:
+    #   name: proto-rem-data
+    #   mountPath: /var/data
+    #   sizeGB: 1
+    #
+    # 플랜을 올리지 않고 다른 위치에 두려면 DATA_DIR 환경변수로 지정한다.
+    # 화면 좌측 하단 [저장] 칸이 지금 상태(영구 / 휘발성)를 그대로 보여준다.
     envVars:
       - key: PYTHON_VERSION
         value: "3.12"
