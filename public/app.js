@@ -231,19 +231,34 @@ function stats() {
   };
 }
 
+/** 각 단계의 상태 — 데이터로 판정한다.
+    'done' 실제로 수행됨 · 'skip' 건너뛰고 지나감 · 'todo' 아직
+
+    완료와 건너뜀을 갈라야 하는 이유:
+    홈페이지를 하나도 못 읽었는데 ✓ 가 뜨면 "분석이 끝났다" 로 읽힌다.
+    그 상태로 문안을 만들면 근거 없는 글이 나가는데 화면은 정상으로 보인다. */
+function stepState(n, x) {
+  switch (n) {
+    case 1: return x.total > 0 ? 'done' : 'todo';
+    case 2:
+      if (x.site > 0) return 'done';
+      // 대상이 있는데 홈페이지가 하나도 없으면 아직 할 일이 남은 것이다.
+      return x.usable.length === 0 ? 'todo' : (x.drafted > 0 ? 'skip' : 'todo');
+    case 3:
+      if (x.facts > 0) return 'done';
+      // 3은 선택 단계다. 근거 없이 지나갔으면 완료가 아니라 '건너뜀' 이다.
+      return (x.drafted > 0 || x.selected > 0) ? 'skip' : 'todo';
+    case 4: return x.selected > 0 ? 'done' : 'todo';
+    case 5: return x.drafted > 0 ? 'done' : 'todo';
+    case 6: return x.approved > 0 ? 'done' : 'todo';
+    case 7: return x.sent > 0 ? 'done' : 'todo';
+    default: return 'todo';
+  }
+}
+
+/** 사이드바·다음단계 계산용 — 건너뜀도 '지나갔다'로 본다. */
 function stepDone(n, x) {
-  return [
-    false,
-    x.total > 0,                       // 1 수집
-    Boolean(S.personaId && S.mode),    // 2 발신·모드
-    // 3은 선택 단계다. 근거가 없어도 5단계가 업종 표준값으로 돌아가므로
-    // 여기서 '미완료'로 잡아 다음 단계를 막지 않는다.
-    x.facts > 0 || x.selected > 0 || x.drafted > 0,   // 3 리서치 (선택)
-    x.selected > 0,                    // 4 대상 확정
-    x.drafted > 0,                     // 5 생성
-    x.approved > 0,                    // 6 승인
-    x.sent > 0,                        // 7 발송
-  ][n];
+  return stepState(n, x) !== 'todo';
 }
 
 /** 지금 해야 할 일 하나 — 각 단계 맨 위에 크게 띄운다. */
@@ -824,7 +839,8 @@ const addCardForm = () => {
         </div>`).join('')}
       <div class="row" style="border-top:1px solid var(--line);padding-top:13px">
         <button data-act="addcard" title="${T.addcard ?? '입력한 내용으로 명함을 추가합니다.'}">명함 추가</button>
-        <button class="ghost" data-act="addcard-clear">입력 지우기</button>
+        <button class="ghost" data-act="addcard-clear"
+          title="이 폼에 입력한 내용만 비웁니다. 이미 추가한 명함은 지워지지 않습니다.">입력 지우기</button>
         <span class="muted" style="font-size:11.5px">이름과 회사만 있어도 추가됩니다. 나머지는 나중에 채워도 됩니다.</span>
       </div>
     </div>
@@ -2249,7 +2265,8 @@ function flowDiagram() {
           title="STEP 1부터 7까지 순서대로 자동 실행합니다. 어디서 막히는지 바로 보입니다. 실제 메일은 나가지 않습니다(큐 적재까지만).">
           ${SC.running ? '실행 중…' : '시나리오 테스트 (1~7 한 번에)'}</button>
         ${Object.keys(SC.results).length && !SC.running
-          ? `<button class="ghost sm" data-act="scenario-clear">결과 지우기</button>` : ''}
+          ? `<button class="ghost sm" data-act="scenario-clear"
+               title="화면에 남은 지난 실행 기록만 지웁니다. 명함·문안·발송 이력은 그대로입니다.">결과 지우기</button>` : ''}
         <span class="muted" style="font-size:11.5px">실제 발송은 하지 않습니다 — 7단계는 큐 적재까지만</span>
         ${S.scenarioRun?.finishedAt && !SC.running ? `
           <span class="tag ${S.scenarioRun.status === 'done' ? 'ok' : 'bad'}" style="margin-left:auto"
