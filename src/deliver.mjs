@@ -15,26 +15,11 @@
  *   - 21~08시에는 전송하지 않는다 (정보통신망법상 야간 광고 전송 제한).
  *   - DRY_RUN=1 이면 전송 대신 로그만 남긴다.
  */
-import net from 'node:net';
 import tls from 'node:tls';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { allEnv } from './env.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-/** 의존성 없이 .env 를 읽는다. */
-function env() {
-  const f = path.join(ROOT, '.env');
-  const out = { ...process.env };
-  if (fs.existsSync(f)) {
-    for (const line of fs.readFileSync(f, 'utf8').split(/\r?\n/)) {
-      const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
-      if (m) out[m[1]] ??= m[2].replace(/^["']|["']$/g, '');
-    }
-  }
-  return out;
-}
+/** .env + process.env 를 합친 맵. 로더는 src/env.mjs 하나로 통일했다. */
+const env = allEnv;
 
 export function smtpStatus() {
   const e = env();

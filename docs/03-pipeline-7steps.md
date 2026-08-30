@@ -22,10 +22,19 @@ STEP 7  발송·추적      승인 건만 발송, 이력·응답 기록    [자�
 ## 단계별 상세
 
 ### STEP 1 — 명함 수집
-- 1순위: 리멤버 반출 (`npm run export`, 이미 로그인된 Chrome에 CDP 접속)
-- 2순위: `data/cards.json` 수동 배치 / CSV
-- 3순위: 샘플 시드 (`data/seed-cards.json`) — UI 검증용
-- 산출: `{id, name, title, company, dept, email, phone, site, met_at, note}`
+
+세 가지 경로를 모두 지원한다. 상황에 맞는 것을 쓰면 된다.
+
+| 방법 | 사용자 부담 | 반복 사용 | 언제 쓰나 |
+|---|---|---|---|
+| **① 전용 브라우저 로그인** | 최초 1회 로그인 | 버튼 하나 | 반복 수집. 평소 Chrome을 건드리지 않는다 |
+| **② 콘솔 스니펫** | 붙여넣기 + 스크롤 | 매번 반복 | 지금 당장 한 번. 재시작·확장 불필요 |
+| **③ CDP 접속** | Chrome 종료 후 재실행 | 버튼 하나 | 완전 자동화가 필요할 때 |
+
+- ①은 `.auth/rem-profile` 전용 프로필을 쓴다. 구글 로그인이 차단되면 네이버·카카오를 쓴다.
+- ②는 `public/collect-snippet.js` — fetch/XHR을 가로채 명함 API 응답을 모아 `cards.json`으로 내려받는다.
+- ③은 `--remote-debugging-port=9222` 로 켠 Chrome에 붙는다.
+- 산출은 셋 다 동일: `{id, name, title, company, dept, email, phone, site, met_at, note}`
 
 > **로그인에 대한 설계 결정**: 구글·네이버는 Playwright가 띄운 브라우저의 로그인을 차단한다(`accounts.google.com/v3/signin/rejected`로 확인됨). 따라서 **자동 로그인을 시도하지 않고**, 사용자가 이미 로그인해 둔 Chrome에 CDP로 붙는다. 비밀번호가 시스템을 통과하지 않는다는 점에서 보안상으로도 이쪽이 낫다.
 

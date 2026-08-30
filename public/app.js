@@ -93,12 +93,25 @@ const cardRows = cards => !cards.length ? '<div class="muted">명함이 없습�
 const VIEWS = {
   ingest: () => `
     <div class="panel">
-      <div class="cap">방법 ① 콘솔 스니펫 — 권장. Chrome 재시작도 확장 설치도 필요 없습니다.</div>
+      <div class="cap">방법 ① 전용 브라우저 로그인 — 한 번 로그인해 두면 이후로는 버튼 하나로 전부 가져옵니다</div>
+      <div class="muted" style="font-size:12.5px;margin-bottom:12px">
+        proto-rem 전용 프로필로 창을 엽니다. 그 창에서 <b>직접 로그인</b>하시면 세션이 저장되고,
+        다음부터는 <b>[전부 가져오기]</b> 만 누르면 됩니다. 평소 쓰시는 Chrome 은 건드리지 않습니다.<br>
+        <span style="color:var(--warn)">구글 로그인은 자동화 브라우저에서 차단될 수 있습니다. 그때는 네이버·카카오 로그인을 쓰세요.</span>
+      </div>
+      <div class="row">
+        <button data-act="rlogin">브라우저 열어 로그인</button>
+        <button class="ghost" data-act="rexport">전부 가져오기</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="cap">방법 ② 콘솔 스니펫 — 이미 로그인된 Chrome 을 그대로 씁니다. 재시작·확장 불필요</div>
       <ol class="muted" style="font-size:12.5px;margin:0 0 12px;padding-left:18px;line-height:1.9">
-        <li>이미 로그인된 Chrome에서 <code>card.rememberapp.co.kr</code> 접속</li>
-        <li><b>F12 → Console</b> 탭에서 아래 스니펫 붙여넣고 Enter</li>
+        <li>쓰시던 Chrome 에서 <code>card.rememberapp.co.kr</code> 접속 (로그인 상태 그대로)</li>
+        <li><b>F12 → Console</b> 탭에 스니펫 붙여넣고 Enter</li>
         <li>명함 목록을 끝까지 스크롤 → 우측 하단 <b>[JSON 저장]</b></li>
-        <li>내려받은 <code>cards.json</code>을 아래에 올리기</li>
+        <li>내려받은 <code>cards.json</code> 을 아래에 올리기</li>
       </ol>
       <div class="row">
         <button class="sm" data-act="copysnippet">스니펫 복사</button>
@@ -111,9 +124,12 @@ const VIEWS = {
     </div>
 
     <div class="panel">
-      <div class="cap">방법 ② CDP 자동 반출 — Chrome을 완전히 종료한 뒤 디버깅 포트로 실행해야 합니다.</div>
-      <pre style="margin-top:0">&amp; "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9222</pre>
-      <div class="row" style="margin-top:10px"><button class="ghost sm" data-act="rexport">리멤버에서 가져오기</button></div>
+      <div class="cap">방법 ③ CDP 접속 — 완전 자동이지만 Chrome 을 종료했다 디버깅 포트로 다시 켜야 합니다</div>
+      <pre style="margin-top:0">Get-Process chrome | Stop-Process -Force
+&amp; "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9222</pre>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost sm" data-act="rexportcdp">CDP 로 가져오기</button>
+      </div>
     </div>
 
     <div class="panel">
@@ -316,8 +332,23 @@ function bind() {
       return api('/api/state');
     },
 
+    rlogin: async () => {
+      alert('전용 브라우저 창이 열립니다.\n그 창에서 직접 로그인해 주세요. 명함 목록이 뜨면 자동으로 감지하고 창이 닫힙니다.');
+      const r = await api('/api/remember-login', {});
+      alert(r.ok
+        ? '로그인 저장 완료. 이제 [전부 가져오기]를 누르세요.'
+        : `로그인이 확인되지 않았습니다.\n\n${r.log}`);
+      return api('/api/state');
+    },
+
     rexport: async () => {
-      const r = await api('/api/remember-export', {});
+      const r = await api('/api/remember-export', { via: 'profile' });
+      alert(r.ok ? '리멤버 반출 완료. [명함 불러오기]를 눌러 적재하세요.' : `반출 실패\n\n${r.log}`);
+      return api('/api/state');
+    },
+
+    rexportcdp: async () => {
+      const r = await api('/api/remember-export', { via: 'cdp' });
       alert(r.ok ? '리멤버 반출 완료. [명함 불러오기]를 눌러 적재하세요.' : `반출 실패\n\n${r.log}`);
       return api('/api/state');
     },

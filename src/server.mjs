@@ -60,8 +60,9 @@ const server = http.createServer(async (req, res) => {
 
     // --- 1-a. 리멤버 반출 (이미 로그인된 Chrome에 CDP로 접속) --------------
     if (p === '/api/remember-export' && req.method === 'POST') {
+      const { via = 'profile' } = await readBody(req);
       const log = await new Promise(resolve => {
-        const child = spawn('npm', ['run', 'export'], {
+        const child = spawn('npm', ['run', 'export', '--', `--via=${via}`], {
           cwd: ROOT, shell: process.platform === 'win32', windowsHide: true,
         });
         let out = '';
@@ -70,8 +71,24 @@ const server = http.createServer(async (req, res) => {
         child.on('close', () => resolve(out));
         child.on('error', e => resolve(String(e.message)));
       });
-      const ok = fs.existsSync(path.join(ROOT, 'data', 'cards.json'));
+      const ok = /명함 \d+건 반출/.test(log);
       return json(res, 200, { ok, log: log.slice(-2500) });
+    }
+
+    // --- 1-a2. 전용 프로필에 로그인 창 띄우기 -----------------------------
+    // 사용자가 그 창에서 직접 로그인한다. 스크립트는 자격증명을 다루지 않는다.
+    if (p === '/api/remember-login' && req.method === 'POST') {
+      const log = await new Promise(resolve => {
+        const child = spawn('npm', ['run', 'login'], {
+          cwd: ROOT, shell: process.platform === 'win32', windowsHide: true,
+        });
+        let out = '';
+        child.stdout.on('data', d => out += d);
+        child.stderr.on('data', d => out += d);
+        child.on('close', () => resolve(out));
+        child.on('error', e => resolve(String(e.message)));
+      });
+      return json(res, 200, { ok: /로그인 확인됨/.test(log), log: log.slice(-2000) });
     }
 
     // --- 1-b. 자사(에이톰) 홈페이지 프로파일 ------------------------------

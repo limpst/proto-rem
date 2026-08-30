@@ -1,25 +1,31 @@
 /**
- * 리멤버 명함 반출 — 이미 로그인된 사용자 Chrome에 CDP로 붙어서 수집한다.
+ * 리멤버 명함 반출.
  *
- * 왜 이 방식인가:
- *   구글/네이버는 Playwright가 띄운 브라우저의 로그인을 차단한다(signin/rejected).
- *   반면 사용자가 평소 쓰는 Chrome은 이미 로그인되어 있다. 그 세션에 붙으면
- *   비밀번호를 다루지 않고도 수집이 가능하다.
+ * 두 가지 경로를 모두 지원한다.
  *
- * 사전 준비 (1회):
- *   Chrome을 완전히 종료한 뒤 디버깅 포트를 열어 다시 실행한다.
- *   "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+ *   --via=profile  (기본)
+ *     proto-rem 전용 브라우저 프로필(.auth/rem-profile)로 연다.
+ *     그 프로필에 한 번 로그인해 두면(npm run login) 이후로는 자동으로 수집한다.
+ *     사용자가 평소 쓰는 Chrome 을 건드리지 않는다.
  *
- * 실행:
- *   npm run export
+ *   --via=cdp
+ *     이미 로그인된 사용자 Chrome 에 CDP 로 붙는다.
+ *     Chrome 을 완전히 종료한 뒤 --remote-debugging-port=9222 로 실행해 두어야 한다.
  *
- * 결과: data/cards.json  (대시보드 STEP 1이 이 파일을 자동으로 읽는다)
+ * 실행:  npm run export            (profile)
+ *        npm run export -- --via=cdp
+ *
+ * 결과:  data/cards.json          (대시보드 STEP 1 이 자동으로 읽는다)
+ *        data/raw/remember-api.json  (추출 실패 시 구조 확인용 원본)
  */
 import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { ROOT } from './browser.mjs';
+import { openBrowser, ROOT } from './browser.mjs';
 
+const argv = process.argv.slice(2);
+const arg = k => argv.find(a => a.startsWith(`--${k}=`))?.split('=')[1];
+const VIA = arg('via') ?? process.env.REMEMBER_VIA ?? 'profile';
 const CDP = process.env.CDP_URL ?? 'http://localhost:9222';
 const CARD_URL = 'https://card.rememberapp.co.kr/';
 
@@ -30,51 +36,63 @@ function harvest(node, out, depth = 0) {
   if (Array.isArray(node)) { for (const v of node) harvest(v, out, depth + 1); return; }
   if (typeof node !== 'object') return;
   const keys = Object.keys(node);
-  const hit = CARD_KEYS.filter(k => keys.includes(k)).length;
-  if (hit >= 3) out.push(node);
+  if (CARD_KEYS.filter(k => keys.includes(k)).length >= 3) out.push(node);
   for (const v of Object.values(node)) harvest(v, out, depth + 1);
 }
 
-const browser = await chromium.connectOverCDP(CDP).catch(e => {
-  console.error(`\nChrome에 붙지 못했습니다 (${CDP}).`);
-  console.error('Chrome을 완전히 종료한 뒤 아래로 다시 실행해 주세요:');
-  console.error('  "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222\n');
-  console.error(String(e.message ?? e));
-  process.exit(1);
-});
+async function open() {
+  if (VIA === 'cdp') {
+    const browser = await chromium.connectOverCDP(CDP).catch(e => {
+      console.error(`\nChrome 에 붙지 못했습니다 (${CDP}).`);
+      console.error('Chrome 을 완전히 종료한 뒤 아래로 다시 실행해 주세요:');
+      console.error('  & "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9222\n');
+      console.error(String(e.message ?? e));
+      process.exit(1);
+    });
+    const ctx = browser.contexts()[0];
+    return { closer: () => browser.close(), page: await ctx.newPage() };
+  }
+  const { ctx, page } = await openBrowser({ headless: process.env.HEADLESS === '1' });
+  return { closer: () => ctx.close(), page };
+}
 
-const ctx = browser.contexts()[0];
-const page = await ctx.newPage();
+const { closer, page } = await open();
 
 const raw = [];
 page.on('response', async (res) => {
   const url = res.url();
   if (!/api\.rememberapp\.co\.kr/.test(url)) return;
   if (/client_config/.test(url)) return;
-  try {
-    const j = await res.json();
-    raw.push({ url: url.split('?')[0], body: j });
-  } catch { /* JSON 아님 */ }
+  try { raw.push({ url: url.split('?')[0], body: await res.json() }); } catch { /* JSON 아님 */ }
 });
 
-console.log('명함 페이지를 여는 중…');
+console.log(`명함 페이지를 여는 중… (via=${VIA})`);
 await page.goto(CARD_URL, { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(5000);
 
-// 무한 스크롤 형태를 가정하고 목록 끝까지 내린다.
-let prev = -1;
-for (let i = 0; i < 60; i++) {
-  const n = raw.length;
-  await page.mouse.wheel(0, 3000);
-  await page.waitForTimeout(1200);
-  if (n === prev) break;
-  prev = n;
+if (/\/login/.test(page.url())) {
+  console.error('\n로그인되어 있지 않습니다.');
+  console.error(VIA === 'cdp'
+    ? '  이 Chrome 에서 리멤버에 로그인한 뒤 다시 실행해 주세요.'
+    : '  먼저 npm run login 으로 이 프로필에 한 번 로그인해 주세요.');
+  await closer();
+  process.exit(2);
 }
+
+// 목록 끝까지 스크롤한다. 새 API 응답이 더 안 들어오면 끝으로 본다.
+let idle = 0;
+for (let i = 0; i < 200 && idle < 5; i++) {
+  const before = raw.length;
+  await page.mouse.wheel(0, 4000);
+  await page.waitForTimeout(1000);
+  idle = raw.length === before ? idle + 1 : 0;
+  if (i % 10 === 0) process.stdout.write(`  스크롤 ${i} · API ${raw.length}건\r`);
+}
+console.log(`\n  API 응답 ${raw.length}건 수집`);
 
 const found = [];
 for (const r of raw) harvest(r.body, found);
 
-// 중복 제거 + 우리 스키마로 정규화
 const seen = new Set();
 const cards = [];
 for (const [i, c] of found.entries()) {
@@ -102,9 +120,8 @@ if (cards.length) {
   await fs.writeFile(path.join(ROOT, 'data', 'cards.json'), JSON.stringify(cards, null, 2), 'utf8');
   console.log(`\n명함 ${cards.length}건 반출 -> data/cards.json`);
 } else {
-  console.log(`\n명함을 찾지 못했습니다. API 응답 ${raw.length}건을 data/raw/remember-api.json 에 남겼습니다.`);
-  console.log('이 파일의 구조를 보고 추출 규칙을 맞추면 됩니다.');
+  console.log('\n명함을 찾지 못했습니다.');
+  console.log(`API 응답 ${raw.length}건을 data/raw/remember-api.json 에 남겼습니다. 이 구조를 보고 추출 규칙을 맞추면 됩니다.`);
 }
 
-await page.close();
-await browser.close();
+await closer();

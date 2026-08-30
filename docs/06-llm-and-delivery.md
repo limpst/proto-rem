@@ -1,14 +1,30 @@
 # 06. LLM 백엔드와 발송
 
-## 1. LLM 백엔드 — 로컬 우선
+## 1. LLM 백엔드
 
-명함은 개인정보다. 따라서 **기본 백엔드를 로컬 Ollama**로 둔다. 데이터가 PC 밖으로 나가지 않는다.
+명함은 개인정보이므로 로컬 처리가 원칙적으로 낫다. 다만 **하드웨어가 그걸 허용하는지 먼저 재야 한다.**
+
+### 실측 결과 (현 개발 PC: Snapdragon ARM64 + Adreno 680)
+
+| 백엔드 | 모델 | 문안 1건 생성 | 비고 |
+|---|---|---|---|
+| ollama | exaone3.5:7.8b | **300초 초과** | GPU 가속 불가 (`/api/ps` 기준 VRAM 0GB, 전량 CPU) |
+| ollama | exaone3.5:2.4b | **338초** | 크기를 1/3로 줄여도 개선 없음 |
+| **claude-cli** | claude-sonnet-5 | **90초** | API 키 불필요. **현재 기본값** |
+
+Ollama 는 Windows ARM64 에서 Adreno GPU 가속을 지원하지 않는다. 결론:
+**이 PC에서 로컬 모델은 실용성이 없어 기본을 `claude-cli` 로 둔다.**
+로컬 처리가 반드시 필요한 환경(예: NVIDIA GPU가 있는 서버)에서는 `LLM_BACKEND=ollama` 로 바꾸면 그대로 동작한다.
+
+### 우선순위
+
+`LLM_BACKEND` 를 지정하지 않으면 아래 순서로 자동 감지한다.
 
 | 순위 | 백엔드 | 조건 | 특성 |
 |---|---|---|---|
-| 1 | **ollama** | `localhost:11434` 응답 | 로컬 실행, 데이터 유출 없음, 무료 |
-| 2 | claude-api | `ANTHROPIC_API_KEY` 존재 | 품질 최상, 토큰 과금 |
-| 3 | claude-cli | Claude Code 설치됨 | 키 발급 불필요 |
+| 1 | ollama | `localhost:11434` 응답 | 로컬 실행, 데이터 유출 없음. **GPU 없으면 매우 느림** |
+| 2 | claude-api | `ANTHROPIC_API_KEY` 존재 | 품질 최상, 토큰 과금. 배포 환경용 |
+| 3 | claude-cli | Claude Code 설치됨 | 키 발급 불필요. 로컬 개발 기본값 |
 
 `LLM_BACKEND=ollama|claude-api|claude-cli` 로 강제 지정할 수 있다.
 모델은 `OLLAMA_MODEL` (기본 `exaone3.5:7.8b` — 한국어 비즈니스 문어체에 강함).

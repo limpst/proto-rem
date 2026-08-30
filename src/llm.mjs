@@ -10,10 +10,11 @@
  */
 import { spawn } from 'node:child_process';
 import http from 'node:http';
+import { env } from './env.mjs';
 
 export const CLAUDE_MODEL = 'claude-sonnet-5';
-export const OLLAMA_URL = process.env.OLLAMA_URL ?? 'http://127.0.0.1:11434';
-export const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? 'exaone3.5:7.8b';
+export const OLLAMA_URL = env('OLLAMA_URL', 'http://127.0.0.1:11434');
+export const OLLAMA_MODEL = env('OLLAMA_MODEL', 'exaone3.5:2.4b');
 
 let cachedBackend = null;
 
@@ -21,14 +22,14 @@ let cachedBackend = null;
 export async function resolveBackend({ refresh = false } = {}) {
   if (cachedBackend && !refresh) return cachedBackend;
 
-  const forced = process.env.LLM_BACKEND;
+  const forced = env('LLM_BACKEND');
   if (forced) {
     cachedBackend = { name: forced, model: forced === 'ollama' ? OLLAMA_MODEL : CLAUDE_MODEL, forced: true };
     return cachedBackend;
   }
   if (await ollamaAlive()) {
     cachedBackend = { name: 'ollama', model: OLLAMA_MODEL, url: OLLAMA_URL };
-  } else if (process.env.ANTHROPIC_API_KEY) {
+  } else if (env('ANTHROPIC_API_KEY')) {
     cachedBackend = { name: 'claude-api', model: CLAUDE_MODEL };
   } else {
     cachedBackend = { name: 'claude-cli', model: CLAUDE_MODEL };
@@ -57,7 +58,7 @@ export async function complete(prompt, { maxTokens = 1500 } = {}) {
  * 로컬 7.8B 모델은 CPU에서 그 이상 걸리는 경우가 있어 node:http 로 직접 호출한다.
  */
 function viaOllama(prompt) {
-  const timeout = Number(process.env.OLLAMA_TIMEOUT_MS ?? 900000);
+  const timeout = Number(env('OLLAMA_TIMEOUT_MS', 900000));
   const url = new URL('/api/generate', OLLAMA_URL);
   const payload = JSON.stringify({
     model: OLLAMA_MODEL,
@@ -65,12 +66,12 @@ function viaOllama(prompt) {
     stream: false,
     // 호출 사이에 모델이 메모리에서 내려가면 다음 호출에 재로딩(수 분)이 붙는다.
     // 캠페인 한 번은 연속 호출이므로 상주시켜 둔다.
-    keep_alive: process.env.OLLAMA_KEEP_ALIVE ?? '30m',
+    keep_alive: env('OLLAMA_KEEP_ALIVE', '30m'),
     options: {
       temperature: 0.4,
       num_ctx: 8192,
       // 출력 길이를 묶어 두면 생성 시간의 상한도 같이 묶인다.
-      num_predict: Number(process.env.OLLAMA_NUM_PREDICT ?? 800),
+      num_predict: Number(env('OLLAMA_NUM_PREDICT', 500)),
     },
   });
 
@@ -106,7 +107,7 @@ async function viaApi(prompt, maxTokens) {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'x-api-key': env('ANTHROPIC_API_KEY'),
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
