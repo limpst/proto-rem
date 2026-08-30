@@ -96,6 +96,9 @@ const normCo = s => String(s ?? '')
 const OWN_CO = normCo(COMPANY.name);
 
 export function classify(card) {
+  // 사람이 직접 제외한 명함 (본인 프로필 등 명함첩에 없는 항목이 API 응답에 섞여 온다)
+  if (card.excluded) return { segmentId: 'excluded', score: 0 };
+
   // 자사 명함(에이톰 임직원)은 발송 대상이 아니다. 명함첩에는 당연히 섞여 있다.
   if (normCo(card.company) === OWN_CO) return { segmentId: 'internal', score: 0 };
 

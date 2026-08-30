@@ -77,15 +77,20 @@ const cardRows = cards => !cards.length ? '<div class="muted">명함이 없습�
     <th style="width:26px"></th><th>담당자</th><th>회사</th><th>고객군</th><th>리서치 근거</th>
   </tr></thead><tbody>
   ${cards.map(c => `<tr>
-    <td>${c.segmentId === 'internal' ? ''
+    <td>${(c.segmentId === 'internal' || c.excluded) ? ''
       : `<input type="checkbox" class="pick" value="${c.id}" ${S.selection.includes(c.id) ? 'checked' : ''}>`}</td>
     <td><b>${esc(c.name)}</b><div class="muted" style="font-size:11.5px">${esc(c.title)}</div></td>
     <td>${esc(c.company)}<div class="muted" style="font-size:11.5px">${esc(c.siteUrl || c.site) || '홈페이지 없음'}</div></td>
-    <td>${c.segmentId === 'internal'
-      ? '<span class="tag" style="border-color:#5a4415;color:var(--warn)">자사 · 발송제외</span>'
-      : c.segmentId && c.segmentId !== 'unclassified'
-        ? `<span class="tag seg">${esc(seg(c.segmentId)?.label ?? c.segmentId)}</span>`
-        : '<span class="tag">미분류</span>'}</td>
+    <td>${c.excluded
+      ? '<span class="tag" style="border-color:#5a2c2c;color:var(--bad)">제외됨</span>'
+      : c.segmentId === 'internal'
+        ? '<span class="tag" style="border-color:#5a4415;color:var(--warn)">자사 · 발송제외</span>'
+        : c.segmentId && c.segmentId !== 'unclassified'
+          ? `<span class="tag seg">${esc(seg(c.segmentId)?.label ?? c.segmentId)}</span>`
+          : '<span class="tag">미분류</span>'}
+      <button class="ghost sm" data-ex="${c.id}" data-exv="${c.excluded ? '0' : '1'}"
+        style="margin-left:6px;padding:1px 7px;font-size:10.5px"
+        title="본인 프로필처럼 명함이 아닌 항목을 제외합니다">${c.excluded ? '되돌리기' : '제외'}</button></td>
     <td>${c.signals?.facts?.length
       ? `<ul class="facts">${c.signals.facts.map(f => `<li>${esc(f)}</li>`).join('')}</ul>`
       : `<span class="muted" style="font-size:11.5px">${c.siteFetch ? `수집 실패 (${esc(c.siteFetch.reason)})` : '미수집'}</span>`}</td>
@@ -384,6 +389,12 @@ function bind() {
     cb.onchange = async () => {
       const ids = [...document.querySelectorAll('.pick:checked')].map(x => x.value);
       S = await api('/api/selection', { ids });
+      render();
+    };
+  });
+  document.querySelectorAll('[data-ex]').forEach(b => {
+    b.onclick = async () => {
+      S = await api('/api/exclude', { id: b.dataset.ex, excluded: b.dataset.exv === '1' });
       render();
     };
   });

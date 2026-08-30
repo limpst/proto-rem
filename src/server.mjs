@@ -205,11 +205,25 @@ const server = http.createServer(async (req, res) => {
       }));
     }
 
+    // --- 명함 개별 제외 (본인 프로필 등) ---------------------------------
+    if (p === '/api/exclude' && req.method === 'POST') {
+      const { id, excluded = true } = await readBody(req);
+      return json(res, 200, update(st => {
+        const c = st.cards.find(x => x.id === id);
+        if (!c) return;
+        c.excluded = Boolean(excluded);
+        c.segmentId = classify(c).segmentId;
+        st.selection = st.selection.filter(x => x !== id || !c.excluded);
+      }));
+    }
+
     if (p === '/api/selection' && req.method === 'POST') {
       const { ids } = await readBody(req);
       return json(res, 200, update(st => {
         // 자사(에이톰) 명함은 어떤 경로로도 발송 대상이 되지 않게 서버에서 막는다.
-        const internal = new Set(st.cards.filter(c => c.segmentId === 'internal').map(c => c.id));
+        const internal = new Set(st.cards
+          .filter(c => c.segmentId === 'internal' || c.segmentId === 'excluded' || c.excluded)
+          .map(c => c.id));
         st.selection = (ids ?? []).filter(id => !internal.has(id));
       }));
     }
