@@ -3,6 +3,11 @@ data/
 *.csv
 *.xlsx
 *.db
+*.db-wal
+*.db-shm
+# 단, UI 확인용 샘플 시드는 실제 개인정보가 아니므로 추적한다.
+# 이게 없으면 배포 환경에서 /api/state 가 500 을 낸다.
+!data/seed-cards.json
 
 # 시크릿
 .env

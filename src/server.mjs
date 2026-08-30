@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { load, save, update } from './store.mjs';
+import { load, save, update, reset } from './store.mjs';
 import { SEGMENTS, COMPANY, classify } from './domain.mjs';
 import { fetchSite, extractSignals, buildSourceProfile } from './enrich.mjs';
 import {
@@ -18,6 +18,7 @@ import {
 import { resolveBackend } from './llm.mjs';
 import { sendEmail, smtpStatus } from './deliver.mjs';
 import { toCards } from './normalize.mjs';
+import { resolveSite } from './resolve.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = process.env.PORT || 5173;
@@ -62,8 +63,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/reset' && req.method === 'POST') {
-      fs.rmSync(path.join(ROOT, 'data', 'state.json'), { force: true });
-      return json(res, 200, load());
+      return json(res, 200, reset());
     }
 
     // --- 1-a. 리멤버 반출 (이미 로그인된 Chrome에 CDP로 접속) --------------
@@ -145,13 +145,40 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, update(st => {
         if (mode) st.mode = mode === '1:N' ? '1:N' : '1:1';
         if (personaId) st.personaId = personaId;
-        // 홈페이지 URL 확정도 이 단계에서 함께 처리한다
         for (const c of st.cards) {
-          c.siteUrl = c.site || '';
-          c.resolved = Boolean(c.siteUrl);
+          if (!c.siteUrl) c.siteUrl = c.site || '';
           if (c.status === 'NEW') c.status = 'RESOLVED';
         }
         st.step = 2;
+      }));
+    }
+
+    // --- 2-b. 홈페이지 자동 탐색 (이메일 도메인 기반) ----------------------
+    if (p === '/api/resolve-sites' && req.method === 'POST') {
+      const st = load();
+      const targets = st.cards.filter(c => !c.excluded && c.segmentId !== 'internal');
+      for (const c of targets) {
+        if (c.siteUrl && c.siteResolve?.via === 'card') continue;
+        const r = await resolveSite(c);
+        c.siteUrl = r.siteUrl;
+        c.siteResolve = { via: r.via, tried: r.tried };
+        c.resolved = Boolean(r.siteUrl);
+        if (c.status === 'NEW') c.status = 'RESOLVED';
+      }
+      st.step = 2;
+      return json(res, 200, save(st));
+    }
+
+    // --- 2-c. 홈페이지 수동 입력 ------------------------------------------
+    if (p === '/api/set-site' && req.method === 'POST') {
+      const { id, site } = await readBody(req);
+      return json(res, 200, update(st => {
+        const c = st.cards.find(x => x.id === id);
+        if (!c) return;
+        const u = String(site ?? '').trim();
+        c.siteUrl = u ? (u.startsWith('http') ? u : `https://${u}`) : '';
+        c.siteResolve = { via: u ? 'manual' : 'none', tried: [] };
+        c.resolved = Boolean(c.siteUrl);
       }));
     }
 
