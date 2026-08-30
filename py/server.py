@@ -28,6 +28,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import classify_ai, copy_ai, deliver, enrich, generate, llm, normalize, resolve
+from . import schema
 from . import sector_fallback as SF
 from . import site_store as SITE
 from . import upsert as UP
@@ -184,7 +185,7 @@ def full_state(st: dict, **extra) -> dict:
             "backend": llm.resolve_backend(), "smtp": deliver.smtp_status(),
             # 데이터가 재배포를 견디는 자리에 있는지 화면이 사실대로 말할 수 있게 싣는다.
             "storage": paths.describe(), "auth": {"enabled": _auth_on()},
-            "runtime": "python", **extra}
+            "runtime": "python", "cardFields": schema.by_group(), **extra}
 
 
 def _card(st, cid):
@@ -675,11 +676,13 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
                     try:
                         signals = enrich.extract_signals(t, site["text"])
                     except Exception as e:
-                        # AI 가 실패해도 파이프라인은 멈추지 않는다. 업종 일반 특성으로 대체한다.
+                        # AI 가 실패해도 파이프라인은 멈추지 않는다.
                         _job_fail_item(job_id, t.get("company") or t.get("name"), e)
                         # 표준값보다 같은 업종 실제 회사의 분석이 한 단계 더 구체적이다.
-                    signals = (SITE.proxy_for(t.get("segmentId"), t.get("siteUrl"))
-                               or SF.signals_for(t.get("segmentId"), f"{type(e).__name__}"))
+                        # (이 대입은 반드시 except 안에 있어야 한다. 밖에 두면 홈페이지를
+                        #  제대로 읽어 뽑은 사실까지 덮어쓰고, e 가 없어 NameError 로 죽는다.)
+                        signals = (SITE.proxy_for(t.get("segmentId"), t.get("siteUrl"))
+                                   or SF.signals_for(t.get("segmentId"), f"{type(e).__name__}"))
                     if url_key:
                         seen_signals[sig_key] = signals
 
@@ -810,10 +813,18 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
 
     # --- 명함 CRUD ---------------------------------------------------------
     if path == "/api/card-add" and method == "POST":
-        made = normalize.to_cards([body.get("card") or {}])
+        raw = body.get("card") or {}
+        made = normalize.to_cards([raw])
         if not made:
             return 400, {"error": "이름이 없습니다. 이름은 반드시 필요합니다."}
         c = made[0]
+        # to_cards 는 연락처 기본 필드만 알고, met_at 같은 곳에 기본값('명함 교환')을
+        # 채워 넣는다. 사람이 직접 입력한 값이 그 기본값에 덮이면 안 되므로
+        # 입력이 있으면 무조건 입력을 이긴다. 스키마에 있는 키만 받아 오염을 막는다.
+        for k in schema.TEXT_KEYS:
+            v = raw.get(k)
+            if v not in (None, ""):
+                c[k] = v
 
         def apply(st):
             # id 는 기존 목록과 겹치지 않게 새로 준다 (to_cards 는 0번부터 매긴다).
@@ -904,7 +915,7 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
             c = _card(st, body.get("id"))
             if not c:
                 return
-            for k in ("name", "title", "company", "dept", "email", "phone", "site", "note"):
+            for k in schema.TEXT_KEYS:
                 if body.get(k) is not None:
                     c[k] = body[k]
             c["segmentId"] = classify(c)["segmentId"]

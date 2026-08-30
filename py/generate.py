@@ -16,6 +16,7 @@ import re
 
 from . import llm
 from .domain import COMPANY, persona, segment as seg_of
+from .schema import facility_facts
 
 CHANNEL_SPEC = {
     "email": {"label": "이메일", "limit": "제목 1줄 + 본문 250~400자", "extra": "제목은 반드시 \"(광고)\"로 시작"},
@@ -89,6 +90,9 @@ def build_prompt(card, segment, signals, channel="email", persona_id=None,
 인용 가능한 실제 실적(이 목록 밖의 실적을 지어내지 말 것):
 {chr(10).join('- ' + r for r in segment['refs'])}
 첫 제안(클로징은 반드시 이것으로): {segment['offer']}
+
+# 담당자가 직접 확인해 입력한 시설 정보 (가장 신뢰도 높음 — 그대로 인용해도 된다)
+{chr(10).join('- ' + f for f in facility_facts(card)) or '- (입력된 시설 정보 없음)'}
 
 # 수신자 홈페이지에서 확인된 사실 (이 중 최소 1개를 반드시 인용)
 {chr(10).join('- ' + str(f) for f in facts) or '- (확인된 사실 없음)'}

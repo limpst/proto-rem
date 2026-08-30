@@ -34,14 +34,30 @@ DEFAULTS = {
 }
 
 # 명함 행에서 그대로 열로 저장하는 필드
-COLS = ["name", "title", "company", "dept", "email", "phone", "site", "siteUrl",
-        "met_at", "note", "segmentId", "status"]
+from .schema import TEXT_KEYS
+
+# 명함 필드는 schema.py 한 곳에서 정의한다. 여기에 따로 적으면 반드시 어긋난다.
+# siteUrl/segmentId/status 는 시스템이 채우는 값이라 스키마 밖에 둔다.
+COLS = [*TEXT_KEYS, "siteUrl", "segmentId", "status"]
 # 객체라서 JSON 문자열로 저장하는 필드
 JSON_COLS = ["signals", "siteFetch", "siteResolve", "message", "segmentAi", "interests"]
 EXTRA_COLS = ["deliveredAt", "queuedAt", "deliverError"]
 
 _local = threading.local()
 _write_lock = threading.Lock()
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    """schema.py 에 필드를 추가하면 기존 DB 에도 열을 붙인다.
+
+    ALTER TABLE ADD COLUMN 은 기존 행을 건드리지 않는다. 그래서 이미 쌓인
+    명함·문안·승인·발송이력을 그대로 둔 채 차원만 늘릴 수 있다.
+    """
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(cards)")}
+    for col in COLS:
+        if col not in have:
+            conn.execute(f"ALTER TABLE cards ADD COLUMN {col} TEXT")
+    conn.commit()
 
 
 def _db() -> sqlite3.Connection:
@@ -63,10 +79,9 @@ def _db() -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS cards (
           tenant       TEXT NOT NULL,
           id           TEXT NOT NULL,
-          name         TEXT, title  TEXT, company TEXT, dept TEXT,
-          email        TEXT, phone  TEXT, site    TEXT, siteUrl TEXT,
-          met_at       TEXT, note   TEXT,
-          segmentId    TEXT, status TEXT,
+          -- 텍스트 필드는 아래 _ensure_columns() 가 schema.py 를 보고 채운다.
+          name         TEXT, company TEXT,
+          siteUrl      TEXT, segmentId TEXT, status TEXT,
           excluded     INTEGER DEFAULT 0,
           selected     INTEGER DEFAULT 0,
           ord          INTEGER DEFAULT 0,
@@ -78,7 +93,9 @@ def _db() -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_cards_seg ON cards(tenant, segmentId);
         """
     )
-    # Node 판 이후에 늘어난 열은 있으면 두고 없으면 붙인다 (기존 DB 호환).
+    # 열이 늘어나면 기존 DB 에도 붙인다. ALTER TABLE ADD COLUMN 은 기존 행을
+    # 건드리지 않으므로, 쌓인 명함·문안·발송이력을 그대로 둔 채 차원만 늘어난다.
+    _ensure_columns(conn)
     have = {r["name"] for r in conn.execute("PRAGMA table_info(cards)")}
     for col in ("segmentAi", "interests", "segmentSource", "segmentScore"):
         if col not in have:

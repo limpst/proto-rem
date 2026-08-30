@@ -158,7 +158,12 @@ def proxy_for(segment_id: str | None, exclude_url: str | None = None,
     src = best.get("company") or best.get("url") or "같은 업종의 다른 회사"
     facts = ((best.get("signals") or {}).get("facts")) or []
     return {
-        "facts": facts,
+        # 다른 회사에서 확인한 사실을 그대로 넘기면 안 된다.
+        # 문안 생성 프롬프트는 이 목록을 "수신자 홈페이지에서 확인된 사실" 로 제목 붙여
+        # 넘기고 "최소 1개를 반드시 인용" 하라고 지시한다. 라벨 없이 넣으면
+        # A사의 실적이 B사의 실적처럼 메일에 적힌다. 문장 자체에 출처를 박아
+        # 인용되더라도 '같은 업종 사례' 로만 읽히게 한다.
+        "facts": [f"같은 업종 사례({src}) — {f}" for f in facts],
         "building_signals": (best.get("signals") or {}).get("building_signals") or {},
         "confidence": "low",
         "kind": "proxy",

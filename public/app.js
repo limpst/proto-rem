@@ -763,25 +763,73 @@ const cardTable = (cards, pick) => LEGEND + `<div class="tw"><table><thead><tr>
     </tr>`; }).join('')}
     </tbody></table></div>`;
 
-/** 명함 직접 추가 폼 — 표 아래에 둔다 (CRUD 의 C) */
-const addCardForm = () => `
-  <div class="panel">
-    <div class="cap">명함 직접 추가</div>
-    <div class="row" style="align-items:flex-end">
-      <input class="inp" id="acName" placeholder="이름 *" style="width:110px" title="필수. 이름이 없으면 명함으로 보지 않습니다.">
-      <input class="inp" id="acTitle" placeholder="직함" style="width:120px"
-        title="직함 — 메일의 호칭에 쓰입니다. (예: 시설관리팀장)">
-      <input class="inp" id="acCompany" placeholder="회사" style="width:170px"
-        title="회사명 — 고객군 자동 판정의 근거입니다. 비우면 미분류로 들어갑니다.">
-      <input class="inp" id="acEmail" placeholder="이메일" style="width:200px"
-        title="수신 주소. 비어 있으면 발송 단계에서 걸립니다.">
-      <input class="inp" id="acPhone" placeholder="전화" style="width:140px"
-        title="전화번호 — 문자(LMS) 발송에 쓰입니다.">
-      <input class="inp" id="acSite" placeholder="홈페이지" style="width:180px"
-        title="회사 홈페이지 주소. 비워 두면 STEP 2 에서 이메일 도메인으로 자동 탐색합니다.">
-      <button data-act="addcard" title="${T.addcard}">추가</button>
+/** 명함 직접 추가 — 서버의 schema.py 가 정의한 필드를 그대로 그린다.
+    필드를 늘릴 때 화면 코드를 고치지 않아도 되도록 서버 정의를 따라간다. */
+const AC = {};              // 입력값 (다시 그려도 살아남게 여기에 둔다)
+let acOpen = false;         // 접힘 상태
+
+function acField(f) {
+  const v = AC[f.key] ?? '';
+  const req = f.required ? ' <span style="color:var(--bad)">*</span>' : '';
+  const tip = f.help ? esc(f.help) : '';
+  const common = `data-ac="${f.key}" title="${tip}"`;
+
+  let input;
+  if (f.type === 'select') {
+    input = `<select class="inp" ${common} style="width:100%">
+      ${(f.options ?? []).map(o =>
+        `<option value="${esc(o)}" ${String(v) === o ? 'selected' : ''}>${esc(o || '— 선택 —')}</option>`).join('')}
+    </select>`;
+  } else if (f.type === 'textarea') {
+    input = `<textarea class="inp" ${common} rows="2" style="width:100%;resize:vertical"
+      placeholder="${esc(f.placeholder ?? '')}">${esc(v)}</textarea>`;
+  } else {
+    input = `<input class="inp" ${common} type="${f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text'}"
+      value="${esc(v)}" placeholder="${esc(f.placeholder ?? '')}" style="width:100%">`;
+  }
+
+  return `<label style="display:block">
+    <span style="display:block;font-size:11px;color:var(--tx2);margin-bottom:4px">
+      ${esc(f.label)}${req}${f.warn ? ' <span class="tag warn" style="font-size:9px">주의</span>' : ''}</span>
+    ${input}
+    ${f.help ? `<span style="display:block;font-size:10.5px;color:var(--tx3);margin-top:3px;line-height:1.45">${esc(f.help)}</span>` : ''}
+  </label>`;
+}
+
+const GROUP_NOTE = {
+  '담당자': '누구에게 보내는가. 이름과 이메일이 없으면 발송 대상이 되지 못합니다.',
+  '회사': '어떤 조직인가. 회사명으로 고객군을 판정하고, 홈페이지로 근거를 뽑습니다.',
+  '시설': '이 제품의 핵심입니다. 준공연도·연면적이 있으면 법정 점검 주기를 추정해 "지금 연락할 이유"를 만들 수 있습니다. 사람이 확인해 넣은 값이라 AI 추정보다 우선합니다.',
+  '영업 맥락': '언제 어떻게 만났고, 보내도 되는 사이인가. 만난 계기는 첫 문장에 인용됩니다.',
+};
+
+const addCardForm = () => {
+  const groups = S.cardFields ?? [];
+  if (!groups.length) return '';
+  const filled = Object.values(AC).filter(v => String(v ?? '').trim()).length;
+
+  return `
+  <details class="panel" ${acOpen ? 'open' : ''} id="acPanel">
+    <summary><b>명함 직접 추가</b>
+      <span class="muted" style="font-weight:400"> — ${groups.reduce((n, g) => n + g.fields.length, 0)}개 항목
+        ${filled ? ` · 입력 ${filled}개` : ''}</span></summary>
+    <div class="body">
+      ${groups.map(g => `
+        <div style="margin-bottom:18px">
+          <div class="cap" style="margin-bottom:4px">${esc(g.group)}</div>
+          <div class="muted" style="font-size:11.5px;margin-bottom:10px;line-height:1.6">${esc(GROUP_NOTE[g.group] ?? '')}</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px">
+            ${g.fields.map(acField).join('')}
+          </div>
+        </div>`).join('')}
+      <div class="row" style="border-top:1px solid var(--line);padding-top:13px">
+        <button data-act="addcard" title="${T.addcard ?? '입력한 내용으로 명함을 추가합니다.'}">명함 추가</button>
+        <button class="ghost" data-act="addcard-clear">입력 지우기</button>
+        <span class="muted" style="font-size:11.5px">이름과 회사만 있어도 추가됩니다. 나머지는 나중에 채워도 됩니다.</span>
+      </div>
     </div>
-  </div>`;
+  </details>`;
+};
 
 /* AI 백엔드가 못 쓰는 상태면 어느 화면에서든 먼저 알려 준다.
    리서치·분류·생성이 전부 여기에 걸려 있어서, 이걸 모르면 "그냥 안 되는" 것으로 보인다. */
@@ -1484,9 +1532,19 @@ function bind() {
     deliver: () => api('/api/deliver', { confirm: false }),
     dequeueall: () => api('/api/dequeue', {}),
 
-    addcard: async ctx => {
-      if (!ctx.card.name.trim()) { toast('이름은 반드시 넣어야 합니다.', true); return api('/api/state'); }
-      return api('/api/card-add', { card: ctx.card });
+    addcard: async () => {
+      if (!String(AC.name ?? '').trim()) { toast('이름은 반드시 필요합니다.', true); return null; }
+      const r = await api('/api/card-add', { card: { ...AC } });
+      if (r.error) { toast(r.error, true); return null; }
+      const n = Object.keys(AC).filter(k => String(AC[k] ?? '').trim()).length;
+      toast(`${AC.name} 님을 추가했습니다. (입력 ${n}개 항목)`);
+      Object.keys(AC).forEach(k => delete AC[k]);
+      return r;
+    },
+    'addcard-clear': async () => {
+      Object.keys(AC).forEach(k => delete AC[k]);
+      toast('입력을 지웠습니다.');
+      return null;
     },
 
     llmreload: async () => {
@@ -1714,6 +1772,15 @@ function bind() {
       render();
     };
   });
+  // 명함 추가 폼 — 값은 AC 에 들고 있는다. render() 가 DOM 을 갈아엎어도 살아남는다.
+  document.querySelectorAll('[data-ac]').forEach(el => {
+    const k = el.dataset.ac;
+    el.oninput = () => { AC[k] = el.value; };
+    el.onchange = () => { AC[k] = el.value; };
+  });
+  const acp = document.querySelector('#acPanel');
+  if (acp) acp.ontoggle = () => { acOpen = acp.open; };
+
   document.querySelectorAll('[data-setting]').forEach(inp => {
     inp.oninput = () => { settingsEdits[inp.dataset.setting] = inp.value; };
     inp.onchange = () => { settingsEdits[inp.dataset.setting] = inp.value; render(); };
