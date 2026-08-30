@@ -49,6 +49,47 @@ def call(path: str, body: dict | None = None, timeout: int = 600):
         return {"error": str(e)}
 
 
+def wait_job(r: dict, label: str = "", timeout: int = 1800) -> dict:
+    """202 로 받은 작업이 끝날 때까지 기다렸다가 최종 상태를 돌려준다.
+
+    홈페이지 탐색·리서치·문안 생성은 로컬 모델이면 건당 수 분이 걸린다. 그래서
+    서버가 응답을 붙잡지 않고 작업 번호만 즉시 주고 백그라운드에서 돈다.
+    예전처럼 응답에서 바로 cards 를 꺼내면 KeyError: 'cards' 가 난다.
+
+    작업이 끝나면 /api/job 이 전체 상태(cards 포함)를 펼쳐서 주므로,
+    호출부는 예전과 똑같이 r["cards"] 를 쓸 수 있다.
+    """
+    jid = r.get("jobId")
+    if not jid:
+        return r                      # 잡이 아니면 그대로 — 동기 응답과도 호환된다
+    t0 = time.time()
+    last = -1
+    while time.time() - t0 < timeout:
+        j = call(f"/api/job?id={jid}")
+        if j.get("error"):
+            return j
+        done, total = j.get("done", 0), j.get("total", 0)
+        if label and done != last:
+            last = done
+            cur = (j.get("current") or "")[:30]
+            print(f"     · {label} {done}/{total} {cur}", flush=True)
+        if j.get("status") == "failed":
+            return {"error": j.get("error") or "작업 실패"}
+        if j.get("status") == "done":
+            return j
+        time.sleep(1.0)
+    return {"error": f"작업이 {timeout}초 안에 끝나지 않았습니다 ({jid})"}
+
+
+def job_note(j: dict) -> str:
+    """건별 실패가 있었으면 꼬리에 덧붙일 문구. 없으면 빈 문자열."""
+    n = j.get("failed") or 0
+    if not n:
+        return ""
+    first = (j.get("errors") or ["-"])[0][:60]
+    return f" · 건너뜀 {n}건 (예: {first})"
+
+
 def step(n, title, fn):
     global ok_count, fail_count
     t0 = time.time()
@@ -120,22 +161,22 @@ def main():
     def s2():
         r = call("/api/mode", {"personaId": "sales", "mode": args.mode})
         assert not r.get("error"), r.get("error")
-        r = call("/api/resolve-sites", {})
+        r = wait_job(call("/api/resolve-sites", {}), "홈페이지 탐색")
         assert not r.get("error"), r.get("error")
         got = [c for c in r["cards"] if c.get("siteUrl")]
         assert got, "홈페이지를 하나도 찾지 못했습니다"
         return (f"{r['personaId']} 명의 · {r['mode']} · 홈페이지 {len(got)}/{len(r['cards'])}건 확보 — "
-                + ", ".join(f"{c['company']}→{c['siteUrl']}" for c in got[:3]))
+                + ", ".join(f"{c['company']}→{c['siteUrl']}" for c in got[:3]) + job_note(r))
 
     # ── STEP 3 리서치 ──────────────────────────────────────────────
     def s3():
-        r = call("/api/enrich", {})
+        r = wait_job(call("/api/enrich", {}), "리서치")
         assert not r.get("error"), r.get("error")
         withfacts = [c for c in r["cards"] if (c.get("signals") or {}).get("facts")]
         assert withfacts, "근거를 뽑은 회사가 없습니다"
         f0 = withfacts[0]
         return (f"{len(withfacts)}개 회사에서 근거 확보 · 예) {f0['company']}: "
-                f"{(f0['signals']['facts'] or ['-'])[0][:60]}")
+                f"{(f0['signals']['facts'] or ['-'])[0][:60]}" + job_note(r))
 
     # ── STEP 4 분류 + 관심사 + 대상 확정 ───────────────────────────
     def s4():
@@ -170,19 +211,17 @@ def main():
         for t in texts[:3]:
             print(f"       “{t}”")
 
-        # 문안 생성 — 남은 게 0 이 될 때까지 반복 (화면과 같은 방식)
-        g = call("/api/generate", {"channel": "email", "batch": 1, "restart": True})
-        guard = 0
-        while g.get("remaining", 0) > 0 and guard < 20:
-            g = call("/api/generate", {"channel": "email", "batch": 1})
-            guard += 1
+        # 문안 생성 — 서버가 작업으로 돌린다. 끝날 때까지 기다린다 (화면과 같은 방식)
+        g = wait_job(call("/api/generate", {"channel": "email", "batch": 1, "restart": True}),
+                     "문안 생성")
+        assert not g.get("error"), g.get("error")
         drafted = [c for c in g["cards"] if c.get("message") and not c["message"].get("error")]
         held = [c for c in g["cards"] if (c.get("message") or {}).get("error")]
         assert drafted, f"초안이 0건입니다 (보류 {len(held)}건: " \
                         f"{[c['message'].get('error') for c in held][:2]})"
         d0 = drafted[0]["message"]
         print(f"     · 예) 제목: {d0.get('subject', '')[:70]}")
-        return f"초안 {len(drafted)}건 생성 (보류 {len(held)}건)"
+        return f"초안 {len(drafted)}건 생성 (보류 {len(held)}건)" + job_note(g)
 
     # ── STEP 6 승인 ────────────────────────────────────────────────
     def s6():
