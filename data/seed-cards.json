@@ -1,14 +1,62 @@
 [
-  {"id":"c001","name":"김성호","title":"시설관리팀장","company":"한빛유통","dept":"시설관리팀","email":"sh.kim@example.co.kr","phone":"010-0000-0001","site":"https://example.co.kr","met_at":"2024 리테일시설 세미나","note":"수원 복합몰 담당"},
-  {"id":"c002","name":"이정민","title":"시설과장","company":"대성대학교","dept":"시설과","email":"jm.lee@example.ac.kr","phone":"010-0000-0002","site":"https://example.ac.kr","met_at":"대학시설협의회","note":"본관 1978년 준공 언급"},
-  {"id":"c003","name":"박준영","title":"자산운용팀장","company":"미래에셋리츠운용","dept":"자산운용","email":"jy.park@example.com","phone":"010-0000-0003","site":"https://example.com","met_at":"부동산 컨퍼런스","note":"상암권 오피스 2개동"},
-  {"id":"c004","name":"최동한","title":"방송시설부장","company":"한국방송통신","dept":"방송시설부","email":"dh.choi@example.or.kr","phone":"010-0000-0004","site":"https://example.or.kr","met_at":"방송기술전","note":"전국 중계소 철탑 다수"},
-  {"id":"c005","name":"정우석","title":"현장소장","company":"대한건설","dept":"○○구역 현장","email":"ws.jung@example.co.kr","phone":"010-0000-0005","site":"https://example.co.kr","met_at":"정비사업 설명회","note":"도심 밀집지 재건축 착공 예정"},
-  {"id":"c006","name":"한지수","title":"관리소장","company":"미사강변센트럴자이 관리사무소","dept":"관리사무소","email":"js.han@example.kr","phone":"010-0000-0006","site":"","met_at":"하남 지역 모임","note":"2016년 준공 아파트"},
-  {"id":"c007","name":"오세훈","title":"안전보건팀장","company":"세종물류센터","dept":"안전보건","email":"sh.oh@example.co.kr","phone":"010-0000-0007","site":"https://example.co.kr","met_at":"물류산업전","note":"대형 창고 3개동"},
-  {"id":"c008","name":"윤태경","title":"시설운영실장","company":"성심의료재단","dept":"시설운영","email":"tk.yoon@example.or.kr","phone":"010-0000-0008","site":"https://example.or.kr","met_at":"병원시설 세미나","note":"본관 증축 예정"},
-  {"id":"c009","name":"강민철","title":"공장장","company":"동양정밀","dept":"생산본부","email":"mc.kang@example.co.kr","phone":"010-0000-0009","site":"https://example.co.kr","met_at":"산업안전 박람회","note":"1990년대 준공 공장동"},
-  {"id":"c010","name":"신보라","title":"FM총괄","company":"제이엘엘코리아","dept":"FM","email":"br.shin@example.com","phone":"010-0000-0010","site":"https://example.com","met_at":"FM 네트워킹","note":"오피스 다수 위탁운영"},
-  {"id":"c011","name":"임경도","title":"시설팀장","company":"하남시설관리공단","dept":"시설팀","email":"kd.lim@example.go.kr","phone":"010-0000-0011","site":"https://example.go.kr","met_at":"지자체 안전점검 교육","note":"제3종시설물 다수 관리"},
-  {"id":"c012","name":"조성진","title":"통신설비팀장","company":"넥스트텔레콤","dept":"통신설비","email":"sj.cho@example.com","phone":"010-0000-0012","site":"https://example.com","met_at":"통신망 전시회","note":"기지국 철탑 유지관리"}
+  {
+    "id": "c001",
+    "name": "김성호",
+    "title": "시설관리팀장",
+    "company": "한빛유통",
+    "dept": "시설관리팀",
+    "email": "sh.kim@example.co.kr",
+    "phone": "010-0000-0001",
+    "site": "https://example.co.kr",
+    "met_at": "2024 리테일시설 세미나",
+    "note": "수원 복합몰 담당"
+  },
+  {
+    "id": "c002",
+    "name": "이정민",
+    "title": "시설과장",
+    "company": "대성대학교",
+    "dept": "시설과",
+    "email": "jm.lee@example.ac.kr",
+    "phone": "010-0000-0002",
+    "site": "https://example.ac.kr",
+    "met_at": "대학시설협의회",
+    "note": "본관 1978년 준공 언급"
+  },
+  {
+    "id": "c003",
+    "name": "박준영",
+    "title": "자산운용팀장",
+    "company": "미래에셋리츠운용",
+    "dept": "자산운용",
+    "email": "jy.park@example.com",
+    "phone": "010-0000-0003",
+    "site": "https://example.com",
+    "met_at": "부동산 컨퍼런스",
+    "note": "상암권 오피스 2개동"
+  },
+  {
+    "id": "c004",
+    "name": "최동한",
+    "title": "방송시설부장",
+    "company": "한국방송통신",
+    "dept": "방송시설부",
+    "email": "dh.choi@example.or.kr",
+    "phone": "010-0000-0004",
+    "site": "https://example.or.kr",
+    "met_at": "방송기술전",
+    "note": "전국 중계소 철탑 다수"
+  },
+  {
+    "id": "c005",
+    "name": "정우석",
+    "title": "현장소장",
+    "company": "대한건설",
+    "dept": "○○구역 현장",
+    "email": "ws.jung@example.co.kr",
+    "phone": "010-0000-0005",
+    "site": "https://example.co.kr",
+    "met_at": "정비사업 설명회",
+    "note": "도심 밀집지 재건축 착공 예정"
+  }
 ]

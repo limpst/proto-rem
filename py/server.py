@@ -114,6 +114,11 @@ def _job_run(jid: str, fn):
     threading.Thread(target=wrap, daemon=True).start()
 
 
+def _is_local(peer: str) -> bool:
+    """요청이 이 컴퓨터 안에서 왔는가. 비밀값 원문 노출을 여기로만 제한한다."""
+    return peer in ("127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1")
+
+
 def full_state(st: dict, **extra) -> dict:
     return {**st, "steps": STEPS, "segments": SEGMENTS, "company": COMPANY,
             "personas": PERSONAS, "copyKinds": copy_ai.KINDS, "copyTones": copy_ai.TONES,
@@ -143,7 +148,7 @@ def _run_npm(args: list[str]) -> str:
 
 
 # ── 라우트 ────────────────────────────────────────────────────────────
-def route(path: str, method: str, body: dict, query: dict):
+def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
     """(status, payload) 를 돌려준다. payload 가 dict 면 JSON 으로 나간다."""
 
     if path == "/api/state":
@@ -322,6 +327,14 @@ def route(path: str, method: str, body: dict, query: dict):
 
     if path == "/api/settings" and method == "POST":
         if body.get("reveal"):
+            # 이 서버에는 로그인이 없다. 배포해 두면 주소를 아는 누구나 이 엔드포인트를
+            # 두드려 .env 원문(API 키·앱 비밀번호)을 그대로 받아 갈 수 있다.
+            # 그래서 원문은 이 컴퓨터에서 연 화면(루프백)에만 준다.
+            # 배포 환경의 비밀값은 화면이 아니라 호스팅의 환경변수로 넣는 것이 맞다.
+            if not _is_local(peer):
+                return 403, {"error": "비밀값 원문은 이 프로그램을 실행한 컴퓨터에서만 볼 수 있습니다. "
+                                      "배포된 주소에서는 열 수 없습니다. "
+                                      "배포 환경의 비밀값은 호스팅(Render 등)의 환경변수로 넣으세요."}
             return 200, {"items": settings_view(reveal=True)}
         updates = body.get("updates") or {}
         if not isinstance(updates, dict) or not updates:
@@ -511,6 +524,63 @@ def route(path: str, method: str, body: dict, query: dict):
             c["segmentId"] = classify(c)["segmentId"]
             st["cards"].append(c)
         L.log("ok", "card", f"명함 추가 — {c.get('name')} · {c.get('company')}")
+        return 200, full_state(store.update(apply))
+
+    if path == "/api/send-one" and method == "POST":
+        # 발송 이력에서 한 건만 바로 보낸다. 전체 발송과 같은 함수를 타므로
+        # DRY_RUN·야간 차단 같은 안전장치가 그대로 적용된다.
+        from datetime import datetime, timezone
+        c = _card(store.load(), body.get("id"))
+        if not c or not c.get("message"):
+            return 400, {"error": "그런 문안이 없습니다."}
+        if (c.get("message") or {}).get("reviewStatus") != "APPROVED":
+            return 400, {"error": "승인된 문안만 보낼 수 있습니다. STEP 6 에서 먼저 승인하세요."}
+        if not c.get("email"):
+            return 400, {"error": f"{c.get('name')} 님의 수신 이메일 주소가 없습니다. "
+                                  f"STEP 1 표에서 [수정]으로 넣어 주세요."}
+        r = deliver.send_email(c["email"], c["message"].get("subject"), c["message"].get("body"))
+        now = datetime.now(timezone.utc).isoformat()
+
+        def apply(st):
+            t2 = _card(st, c["id"])
+            if not t2:
+                return
+            t2["status"] = "SENT" if r["ok"] else "SEND_FAILED"
+            t2["deliveredAt"] = now
+            t2["deliverError"] = None if r["ok"] else r.get("error")
+        L.log("ok" if r["ok"] else "error", "deliver",
+              f"즉시 발송 {c.get('name')} — {'성공' if r['ok'] else r.get('error')}")
+        return 200, full_state(store.update(apply),
+                               results=[{"id": c["id"], "to": c["email"], "sent": r["ok"],
+                                         "note": r.get("messageId") or r.get("error")}])
+
+    if path == "/api/dequeue" and method == "POST":
+        # 큐 적재는 되돌릴 수 있어야 한다. 승인 상태는 건드리지 않고 큐에서만 뺀다.
+        # (id 를 주면 그 건만, 없으면 큐에 있는 것 전부)
+        cid = body.get("id")
+
+        def apply(st):
+            n = 0
+            for c in st["cards"]:
+                if c.get("status") != "QUEUED" or (cid and c["id"] != cid):
+                    continue
+                approved = (c.get("message") or {}).get("reviewStatus") == "APPROVED"
+                c["status"] = "APPROVED" if approved else "DRAFTED"
+                c["queuedAt"] = None
+                n += 1
+            L.log("ok", "deliver", f"큐에서 뺌 — {n}건")
+        return 200, full_state(store.update(apply))
+
+    if path == "/api/card-top" and method == "POST":
+        # 표의 순서는 store 가 목록 순서(ord)로 저장한다. 목록에서 앞으로 옮기면 그대로 남는다.
+        cid = body.get("id")
+
+        def apply(st):
+            cards = st["cards"]
+            i = next((k for k, c in enumerate(cards) if c["id"] == cid), None)
+            if i is None or i == 0:
+                return
+            cards.insert(0, cards.pop(i))
         return 200, full_state(store.update(apply))
 
     if path == "/api/card-delete" and method == "POST":
@@ -832,7 +902,7 @@ class Handler(BaseHTTPRequestHandler):
                 L.log("net", "http", f"{method} {path}",
                       {k: v for k, v in body.items() if k not in ("cards", "text")} or None)
             try:
-                r = route(path, method, body, query)
+                r = route(path, method, body, query, peer=self.client_address[0])
             except Exception as e:
                 L.log("error", "http", f"{method} {path} 처리 실패 — {e}")
                 traceback.print_exc()

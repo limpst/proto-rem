@@ -445,6 +445,13 @@ const T = {
   paste: '위 상자의 텍스트를 표·덩어리·한 줄 중 무엇이든 해석해 명함을 만듭니다. 기존 명함 목록은 대체됩니다.',
   addcard: '명함 한 건을 직접 추가합니다. 기존 목록은 그대로 두고 맨 뒤에 붙습니다.',
   delcard: '이 명함을 목록에서 완전히 지웁니다. 되돌릴 수 없습니다.',
+  topcard: '이 명함을 목록 맨 위로 올립니다. 순서는 저장돼 다음에 열어도 그대로입니다.',
+  dequeue: '이 건을 발송 큐에서 뺍니다. 승인 상태와 문안은 그대로 남고, [발송 큐에 넣기] 를 다시 누르면 들어갑니다.',
+  dequeueAll: '큐에 올라간 건을 전부 뺍니다. 이미 발송(SENT)된 건은 건드리지 않습니다.',
+  sendone: '이 한 건만 지금 바로 보냅니다. 연습모드(DRY_RUN)면 실제로 나가지 않고, 야간 차단 같은 안전장치는 그대로 걸립니다.',
+  fSubject: '메일 제목입니다. 여기서 고친 뒤 [승인] 또는 [고친 내용만 저장]을 눌러야 반영됩니다. (광고) 표기는 발송 시 자동으로 붙습니다.',
+  fBody: '메일 본문입니다. 여기서 고친 뒤 [승인] 또는 [고친 내용만 저장]을 눌러야 반영됩니다. 수신거부 안내와 서명은 발송 시 자동으로 붙습니다.',
+  osEnv: '이 값은 호스팅(Render 등)의 환경변수로 지정돼 있습니다. 환경변수가 .env 보다 우선하므로 여기서 고쳐도 바뀌지 않습니다. 호스팅 대시보드에서 바꾸세요.',
   setSave: '고친 값을 .env 파일에 씁니다. 항목에 따라 서버를 다시 시작해야 적용되는 것도 있습니다.',
   setReveal: '가려진 비밀값(API 키·앱 비밀번호)을 화면에 그대로 보여줍니다. 화면 공유 중에는 누르지 마세요.',
   setReload: '.env 의 현재 값을 다시 읽어옵니다. 저장하지 않은 입력은 버려집니다.',
@@ -609,7 +616,8 @@ const cardRows = (cards, { pick = true } = {}) => !cards.length
         ? `<button class="ok xs" data-save="${c.id}" title="${T.savecard}">저장</button>
            <button class="ghost xs" data-cancel="${c.id}" style="margin-top:5px"
              title="${T.cancelcard}">취소</button>`
-        : `<button class="ghost xs" data-edit="${c.id}" title="${T.editcard}">수정</button>
+        : `<button class="ghost xs" data-top="${c.id}" title="${T.topcard}">맨 위로</button>
+           <button class="ghost xs" data-edit="${c.id}" style="margin-top:5px" title="${T.editcard}">수정</button>
            <button class="ghost xs" data-ex="${c.id}" data-exv="${c.excluded ? '0' : '1'}" style="margin-top:5px"
              title="${c.excluded ? '이 명함을 다시 발송 대상 후보로 되돌립니다.' : '명함이 아닌 항목(본인 프로필 등)을 발송 대상에서 뺍니다. 데이터는 남습니다.'}">${c.excluded ? '되돌리기' : '제외'}</button>
            <button class="ghost xs" data-del="${c.id}" style="margin-top:5px;color:var(--bad)"
@@ -824,22 +832,23 @@ function settingsView() {
               <code style="font-size:10.5px;color:var(--tx3)">${esc(i.key)}</code>
               ${i.set ? '<span class="tag ok">설정됨</span>' : '<span class="tag">비어 있음</span>'}
               ${i.secret ? '<span class="tag warn">비밀값</span>' : ''}
-              ${i.fromOsEnv ? '<span class="tag" title="실행할 때 지정된 값이 .env 보다 우선합니다">실행 인자 우선</span>' : ''}
+              ${i.fromOsEnv ? `<span class="tag warn" title="${T.osEnv}">환경변수 우선 · 여기서 못 바꿈</span>` : ''}
             </div>
             <div class="muted" style="font-size:12px;margin:5px 0 3px">${esc(i.what)}</div>
             <div style="font-size:12px;color:var(--tx2);margin-bottom:8px">${esc(i.why)}</div>
             ${isBool
               ? `<div class="row">
                    <button class="opt ${String(val) === '1' ? 'on' : ''}" style="width:auto;padding:7px 14px"
-                     data-set="${i.key}" data-val="1"
-                     title="${esc(i.key)} 를 1(켬)로 둡니다. ${T.setPending}">켜기 (1)</button>
+                     data-set="${i.key}" data-val="1" ${i.fromOsEnv ? 'disabled' : ''}
+                     title="${i.fromOsEnv ? T.osEnv : `${esc(i.key)} 를 1(켬)로 둡니다. ${T.setPending}`}">켜기 (1)</button>
                    <button class="opt ${String(val) !== '1' ? 'on' : ''}" style="width:auto;padding:7px 14px"
-                     data-set="${i.key}" data-val=""
-                     title="${esc(i.key)} 를 비워 끕니다. ${T.setPending}">끄기</button>
+                     data-set="${i.key}" data-val="" ${i.fromOsEnv ? 'disabled' : ''}
+                     title="${i.fromOsEnv ? T.osEnv : `${esc(i.key)} 를 비워 끕니다. ${T.setPending}`}">끄기</button>
                  </div>`
               : `<input class="site-in" style="max-width:520px" data-setting="${i.key}"
                    value="${esc(val)}" placeholder="${esc(i.placeholder ?? '')}"
-                   title="${i.secret ? '비밀값입니다 — 화면에는 가려서 나오고 [비밀값 보기] 로만 확인됩니다. ' : ''}${T.setPending} 비워서 저장하면 이 항목을 지우고 기본값으로 되돌립니다."
+                   ${i.fromOsEnv ? 'disabled' : ''}
+                   title="${i.fromOsEnv ? T.osEnv : `${i.secret ? '비밀값입니다 — 화면에는 가려서 나오고 [비밀값 보기] 로만 확인됩니다. ' : ''}${T.setPending} 비워서 저장하면 이 항목을 지우고 기본값으로 되돌립니다.`}"
                    ${i.secret && !settingsReveal ? 'type="password"' : ''}>`}
           </div>`;
         }).join('')}
@@ -1163,15 +1172,23 @@ DRY_RUN=1</pre></div>` : ''}
         승인한 메일만 나갑니다 · 밤 9시~아침 8시 발송 차단 · (광고) 표기와 수신거부 안내 자동 삽입</div>
     </div>
     <div class="panel">
-      <div class="cap">발송 이력</div>
-      <div class="tw"><table><thead><tr><th>담당자</th><th>회사</th><th>수신</th><th>상태</th><th>시각</th></tr></thead><tbody>
+      <div class="cap">발송 이력
+        ${(S.cards ?? []).some(c => c.status === 'QUEUED')
+          ? `<button class="ghost xs" data-act="dequeueall" style="margin-left:8px"
+               title="${T.dequeueAll}">큐 비우기</button>` : ''}</div>
+      <div class="tw"><table><thead><tr><th>담당자</th><th>회사</th><th>수신</th><th>상태</th><th>시각</th><th style="width:84px">관리</th></tr></thead><tbody>
       ${(S.cards ?? []).filter(c => c.message).map(c => `<tr>
         <td>${esc(c.name)}</td><td>${esc(c.company)}</td>
         <td class="muted">${esc(c.email) || '-'}</td>
         <td><span class="tag ${c.status === 'SENT' ? 'ok' : ''}">${esc(c.status)}</span>
           ${c.deliverError ? `<div class="chk f" style="margin-top:4px">${esc(c.deliverError)}</div>` : ''}</td>
-        <td class="muted">${esc(c.deliveredAt ?? c.queuedAt) || '-'}</td></tr>`).join('')
-      || '<tr><td colspan="5" class="muted">아직 없습니다.</td></tr>'}
+        <td class="muted">${esc(c.deliveredAt ?? c.queuedAt) || '-'}</td>
+        <td>${c.status === 'SENT' ? '' : `
+          <button class="ok xs" data-send1="${c.id}" title="${T.sendone}">즉시 발송</button>
+          ${c.status === 'QUEUED'
+            ? `<button class="ghost xs" data-deq="${c.id}" style="margin-top:5px" title="${T.dequeue}">큐에서 빼기</button>`
+            : ''}`}</td></tr>`).join('')
+      || '<tr><td colspan="6" class="muted">아직 없습니다.</td></tr>'}
       </tbody></table></div>
     </div>`,
 };
@@ -1196,8 +1213,8 @@ function msgCard(c) {
         ${st === 'APPROVED' ? '승인됨' : st === 'REJECTED' ? '반려됨' : '검토 대기'}</span></div>
     <div class="checks">${(m.checks ?? []).map(k =>
       `<span class="chk ${k.pass ? 'p' : 'f'}">${k.pass ? '✓' : '✕'} ${esc(k.label)}</span>`).join('')}</div>
-    ${m.channel === 'email' ? `<input class="f-subject" value="${esc(m.subject)}">` : ''}
-    <textarea class="f-body">${esc(m.body)}</textarea>
+    ${m.channel === 'email' ? `<input class="f-subject" value="${esc(m.subject)}" title="${T.fSubject}">` : ''}
+    <textarea class="f-body" title="${T.fBody}">${esc(m.body)}</textarea>
     <div class="muted" style="font-size:11.5px;margin-bottom:10px">
       이 메일이 요구하는 행동: ${esc(m.cta) || '-'}<br>
       인용한 실적: ${esc((m.refs_used ?? []).join(', ')) || '없음'}</div>
@@ -1315,6 +1332,7 @@ function bind() {
     source: () => api('/api/source-profile', {}),
     resolvesites: async () => { await runJob('/api/resolve-sites', {}, '홈페이지 찾는 중'); return null; },
     deliver: () => api('/api/deliver', { confirm: false }),
+    dequeueall: () => api('/api/dequeue', {}),
 
     addcard: async ctx => {
       if (!ctx.card.name.trim()) { toast('이름은 반드시 넣어야 합니다.', true); return api('/api/state'); }
@@ -1506,6 +1524,31 @@ function bind() {
   document.querySelectorAll('[data-ex]').forEach(b => {
     b.onclick = async () => {
       adopt(await api('/api/exclude', { id: b.dataset.ex, excluded: b.dataset.exv === '1' }));
+      render();
+    };
+  });
+  document.querySelectorAll('[data-send1]').forEach(b => {
+    b.onclick = async () => {
+      const row = b.closest('tr');
+      const who = row?.querySelector('td')?.textContent?.trim() ?? '이 건';
+      if (!confirm(`${who} 님에게 지금 보냅니다.${S.smtp?.dryRun ? '\n(연습모드라 실제로는 나가지 않습니다.)' : '\n되돌릴 수 없습니다.'}\n계속할까요?`)) return;
+      const r = await api('/api/send-one', { id: b.dataset.send1 });
+      if (r.error) { toast(r.error, true); return; }
+      adopt(r);
+      const one = (r.results ?? [])[0] ?? {};
+      toast(one.sent ? `발송 완료 — ${one.to}` : `발송 실패 — ${one.note ?? ''}`, !one.sent);
+      render();
+    };
+  });
+  document.querySelectorAll('[data-deq]').forEach(b => {
+    b.onclick = async () => {
+      adopt(await api('/api/dequeue', { id: b.dataset.deq }));
+      render();
+    };
+  });
+  document.querySelectorAll('[data-top]').forEach(b => {
+    b.onclick = async () => {
+      adopt(await api('/api/card-top', { id: b.dataset.top }));
       render();
     };
   });
