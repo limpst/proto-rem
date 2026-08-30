@@ -13,6 +13,8 @@ const openPrompts = new Set();
 /* 지금 편집 중인 명함 id. 표는 매 렌더마다 통째로 다시 그려지므로
    "어느 행이 편집 모드인가"는 DOM 이 아니라 여기에 둔다. */
 const editing = new Set();
+/* 발송 이력에서 수신 주소를 고치는 중인 명함. 표가 다시 그려져도 유지한다. */
+const editMail = new Set();
 
 /* 문구 스튜디오 상태 — 서버가 아니라 화면에 둔다. 고르는 중에는 저장할 게 없다. */
 let palette = null;
@@ -367,7 +369,12 @@ function draw(loading) {
     <dt>서버</dt><dd>${esc(S.runtime === 'python' ? 'Python' : 'Node')} · SQLite</dd>
     <dt>저장</dt><dd title="${esc(S.storage?.note ?? '')}${S.storage?.stateDir ? ' · ' + esc(S.storage.stateDir) : ''}"
       style="color:${S.storage ? (S.storage.persistent ? 'var(--ok)' : 'var(--warn)') : 'var(--tx3)'}">
-      ${S.storage ? (S.storage.persistent ? '영구' : '⚠ 휘발성') : '-'}</dd>`;
+      ${S.storage ? (S.storage.persistent ? '영구' : '⚠ 배포시 초기화') : '-'}</dd>
+    ${S.auth?.enabled ? `<dt>접속</dt><dd><button class="ghost xs" id="logout"
+      title="${T.logout}">로그아웃</button></dd>` : ''}`;
+
+  const lo = $('#logout');
+  if (lo) lo.onclick = async () => { await api('/api/logout', {}); location.replace('/login.html'); };
 
   // 흐름도 — 어느 단계를 지나는지, 무슨 컴포넌트가 도는지 화면 위에 항상 보인다.
   const fd = document.querySelector('#flowdiag-slot');
@@ -451,9 +458,12 @@ const T = {
   addcard: '명함 한 건을 직접 추가합니다. 기존 목록은 그대로 두고 맨 뒤에 붙습니다.',
   delcard: '이 명함을 목록에서 완전히 지웁니다. 되돌릴 수 없습니다.',
   topcard: '이 명함을 목록 맨 위로 올립니다. 순서는 저장돼 다음에 열어도 그대로입니다.',
+  logout: '이 브라우저의 접속을 끊고 로그인 화면으로 돌아갑니다. 공용 PC 에서는 자리를 뜨기 전에 눌러 주세요.',
   dequeue: '이 건을 발송 큐에서 뺍니다. 승인 상태와 문안은 그대로 남고, [발송 큐에 넣기] 를 다시 누르면 들어갑니다.',
   dequeueAll: '큐에 올라간 건을 전부 뺍니다. 이미 발송(SENT)된 건은 건드리지 않습니다.',
   sendone: '이 한 건만 지금 바로 보냅니다. 연습모드(DRY_RUN)면 실제로 나가지 않고, 야간 차단 같은 안전장치는 그대로 걸립니다.',
+  editmail: '수신 주소를 여기서 바로 고칩니다. 명함에 이메일이 없어 발송이 막힌 건을 STEP 1 로 돌아가지 않고 처리할 수 있습니다.',
+  savemail: '고친 수신 주소를 저장합니다. 명함에도 함께 반영됩니다.',
   fSubject: '메일 제목입니다. 여기서 고친 뒤 [승인] 또는 [고친 내용만 저장]을 눌러야 반영됩니다. (광고) 표기는 발송 시 자동으로 붙습니다.',
   fBody: '메일 본문입니다. 여기서 고친 뒤 [승인] 또는 [고친 내용만 저장]을 눌러야 반영됩니다. 수신거부 안내와 서명은 발송 시 자동으로 붙습니다.',
   osEnv: '이 값은 호스팅(Render 등)의 환경변수로 지정돼 있습니다. 환경변수가 .env 보다 우선하므로 여기서 고쳐도 바뀌지 않습니다. 호스팅 대시보드에서 바꾸세요.',
@@ -1184,7 +1194,12 @@ DRY_RUN=1</pre></div>` : ''}
       <div class="tw"><table><thead><tr><th>담당자</th><th>회사</th><th>수신</th><th>상태</th><th>시각</th><th style="width:84px">관리</th></tr></thead><tbody>
       ${(S.cards ?? []).filter(c => c.message).map(c => `<tr>
         <td>${esc(c.name)}</td><td>${esc(c.company)}</td>
-        <td class="muted">${esc(c.email) || '-'}</td>
+        <td class="muted">${editMail.has(c.id)
+          ? `<input class="inp f-mail" value="${esc(c.email)}" placeholder="이메일 주소"
+               style="max-width:200px;padding:5px 8px;font-size:12px" title="${T.editmail}">
+             <button class="ok xs" data-mailsave="${c.id}" style="margin-left:4px" title="${T.savemail}">저장</button>`
+          : `${esc(c.email) || '<span style="color:var(--bad)">주소 없음</span>'}
+             <button class="ghost xs" data-mailedit="${c.id}" style="margin-left:4px" title="${T.editmail}">수정</button>`}</td>
         <td><span class="tag ${c.status === 'SENT' ? 'ok' : ''}">${esc(c.status)}</span>
           ${c.deliverError ? `<div class="chk f" style="margin-top:4px">${esc(c.deliverError)}</div>` : ''}</td>
         <td class="muted">${esc(c.deliveredAt ?? c.queuedAt) || '-'}</td>
@@ -1538,6 +1553,18 @@ function bind() {
   document.querySelectorAll('[data-ex]').forEach(b => {
     b.onclick = async () => {
       adopt(await api('/api/exclude', { id: b.dataset.ex, excluded: b.dataset.exv === '1' }));
+      render();
+    };
+  });
+  document.querySelectorAll('[data-mailedit]').forEach(b => {
+    b.onclick = () => { editMail.add(b.dataset.mailedit); render(); };
+  });
+  document.querySelectorAll('[data-mailsave]').forEach(b => {
+    b.onclick = async () => {
+      // 값은 렌더가 지우기 전에, 클릭 시점에 그 행에서 읽는다.
+      const v = b.closest('tr')?.querySelector('.f-mail')?.value?.trim() ?? '';
+      editMail.delete(b.dataset.mailsave);
+      adopt(await api('/api/card-update', { id: b.dataset.mailsave, email: v }));
       render();
     };
   });

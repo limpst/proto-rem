@@ -13,6 +13,8 @@ HITL 게이트 3곳: STEP2(발신·모드), STEP4(대상 선택), STEP6(문안 �
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import mimetypes
 import os
@@ -34,7 +36,7 @@ from . import log as L
 from .domain import COMPANY, PERSONAS, SEGMENTS, classify
 from .domain import persona as persona_of
 from .domain import segment as seg_of
-from .env import settings_view, write_env
+from .env import env, settings_view, write_env
 
 ROOT = Path(__file__).resolve().parent.parent
 PUBLIC = ROOT / "public"
@@ -114,6 +116,33 @@ def _job_run(jid: str, fn):
     threading.Thread(target=wrap, daemon=True).start()
 
 
+# ── 접속 인증 ───────────────────────────────────────────────────────────
+# 이 화면에는 명함(개인정보)과 발송 설정이 들어 있다. 사내망에 올려 두면
+# 주소를 아는 사람은 누구나 열 수 있으므로, APP_PASSWORD 가 있으면 전부 잠근다.
+# 비워 두면 지금까지처럼 무인증으로 뜬다(내 PC 개발용).
+#
+# 세션은 비밀번호에서 파생한 값 하나를 쿠키에 담는 방식이다. 서버에 세션 저장소를
+# 두지 않아 재시작해도 로그인이 풀리지 않고, 비밀번호를 바꾸면 전부 로그아웃된다.
+COOKIE = "pr_session"
+
+
+def _auth_on() -> bool:
+    return bool(env("APP_PASSWORD"))
+
+
+def _token() -> str:
+    return hmac.new((env("APP_PASSWORD") or "").encode(),
+                    b"proto-rem-session-v1", hashlib.sha256).hexdigest()
+
+
+def _authed(cookie_header: str) -> bool:
+    for part in (cookie_header or "").split(";"):
+        k, _, v = part.strip().partition("=")
+        if k == COOKIE:
+            return hmac.compare_digest(v.strip(), _token())
+    return False
+
+
 def _is_local(peer: str) -> bool:
     """요청이 이 컴퓨터 안에서 왔는가. 비밀값 원문 노출을 여기로만 제한한다."""
     return peer in ("127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1")
@@ -124,7 +153,7 @@ def full_state(st: dict, **extra) -> dict:
             "personas": PERSONAS, "copyKinds": copy_ai.KINDS, "copyTones": copy_ai.TONES,
             "backend": llm.resolve_backend(), "smtp": deliver.smtp_status(),
             # 데이터가 재배포를 견디는 자리에 있는지 화면이 사실대로 말할 수 있게 싣는다.
-            "storage": paths.describe(),
+            "storage": paths.describe(), "auth": {"enabled": _auth_on()},
             "runtime": "python", **extra}
 
 
@@ -535,6 +564,8 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
             return 400, {"error": "그런 문안이 없습니다."}
         if (c.get("message") or {}).get("reviewStatus") != "APPROVED":
             return 400, {"error": "승인된 문안만 보낼 수 있습니다. STEP 6 에서 먼저 승인하세요."}
+        if c.get("excluded") or c.get("segmentId") == "internal":
+            return 400, {"error": f"{c.get('name')} 님은 자사·제외 명함이라 발송할 수 없습니다."}
         if not c.get("email"):
             return 400, {"error": f"{c.get('name')} 님의 수신 이메일 주소가 없습니다. "
                                   f"STEP 1 표에서 [수정]으로 넣어 주세요."}
@@ -570,6 +601,9 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
                 n += 1
             L.log("ok", "deliver", f"큐에서 뺌 — {n}건")
         return 200, full_state(store.update(apply))
+
+    if path == "/api/logout" and method == "POST":
+        return 200, {"ok": True, "__clear_cookie": True}
 
     if path == "/api/card-top" and method == "POST":
         # 표의 순서는 store 가 목록 순서(ord)로 저장한다. 목록에서 앞으로 옮기면 그대로 남는다.
@@ -819,7 +853,19 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
     if path == "/api/deliver" and method == "POST":
         confirm = bool(body.get("confirm"))
         st = store.load()
-        approved = [c for c in st["cards"] if (c.get("message") or {}).get("reviewStatus") == "APPROVED"]
+        # 자사·제외 명함은 어떤 경우에도 내보내지 않는다.
+        # selection 에서는 막고 있었지만, 예전 실행에서 만들어진 문안이 남아 있으면
+        # 승인 상태만으로 발송 대상에 끼어들었다(자사 주소로 광고 메일이 나간다).
+        approved = [c for c in st["cards"]
+                    if (c.get("message") or {}).get("reviewStatus") == "APPROVED"
+                    and not c.get("excluded") and c.get("segmentId") != "internal"]
+        blocked = [c for c in st["cards"]
+                   if (c.get("message") or {}).get("reviewStatus") == "APPROVED"
+                   and (c.get("excluded") or c.get("segmentId") == "internal")]
+        if blocked:
+            L.log("warn", "deliver",
+                  f"자사·제외 {len(blocked)}건은 승인돼 있어도 발송하지 않습니다 — "
+                  + ", ".join(c.get("name") or c["id"] for c in blocked[:5]))
         results = []
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
@@ -923,6 +969,27 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError as e:
                     return self._send(400, {"error": f"요청 본문을 해석하지 못했습니다: {e}"})
 
+        # --- 접속 인증 게이트 -------------------------------------------
+        if _auth_on() and not _authed(self.headers.get("cookie", "")):
+          try:
+            if path == "/api/login" and method == "POST":
+                if hmac.compare_digest(str(body.get("password") or ""), env("APP_PASSWORD") or ""):
+                    L.log("ok", "auth", f"로그인 — {self.client_address[0]}")
+                    return self._send(200, {"ok": True}, headers={
+                        "set-cookie": f"{COOKIE}={_token()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000"})
+                time.sleep(1.0)          # 무차별 대입 속도를 늦춘다
+                L.log("warn", "auth", f"로그인 실패 - {self.client_address[0]}")
+                return self._send(401, {"error": "비밀번호가 다릅니다."})
+            if path.startswith("/api/"):
+                return self._send(401, {"error": "로그인이 필요합니다.", "login": True})
+            if path != "/login.html":
+                # 어떤 주소로 들어와도 로그인 화면부터 보여준다
+                return self._send(200, (PUBLIC / "login.html").read_bytes(),
+                                  "text/html; charset=utf-8")
+          except Exception as _e:
+            traceback.print_exc()
+            return self._send(500, {"error": f"AUTHGATE {type(_e).__name__}: {_e}"})
+
         if path.startswith("/api/"):
             # 로그 폴링은 그 자체가 로그를 만들면 무한히 불어나므로 기록하지 않는다.
             if path != "/api/logs":
@@ -936,6 +1003,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(500, {"error": f"{type(e).__name__}: {e}"})
             if r is None:
                 return self._send(404, {"error": f"not found: {method} {path}"})
+            if isinstance(r[1], dict) and r[1].pop("__clear_cookie", False):
+                return self._send(r[0], r[1],
+                                  headers={"set-cookie": f"{COOKIE}=; Path=/; Max-Age=0"})
             return self._send(r[0], r[1])
 
         # --- 정적 파일 ---

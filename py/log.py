@@ -47,7 +47,20 @@ def log(level: str, tag: str, msg: str, meta: dict | None = None) -> dict:
 
     # 터미널에도 같은 줄을 남긴다. 서버 창만 봐도 흐름이 읽히도록.
     line = f"[{tag}] {e['msg']}" + (f" {json.dumps(e.get('meta', {}), ensure_ascii=False)}" if meta else "")
-    print(line, file=sys.stderr if level == "error" else sys.stdout, flush=True)
+    out = sys.stderr if level == "error" else sys.stdout
+    try:
+        print(line, file=out, flush=True)
+    except (UnicodeEncodeError, ValueError, OSError):
+        # 콘솔 코드페이지가 cp949 면 '—' 같은 글자에서 터진다.
+        # 로그 한 줄 때문에 요청 처리가 통째로 죽으면 안 된다
+        # (응답 없이 연결이 끊겨 화면에는 "Failed to fetch" 만 남는다).
+        try:
+            buf = getattr(out, "buffer", None)
+            if buf is not None:
+                buf.write((line + "\n").encode("utf-8", "replace"))
+                buf.flush()
+        except Exception:
+            pass          # 로그는 부수적이다. 여기서 더 시끄러워질 이유가 없다
     return e
 
 

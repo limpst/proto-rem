@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>proto-rem · 로그인</title>
+<style>
+  :root{ --bg:#0d0f13; --panel:#171a21; --sunk:#0f1216; --line:#252a34; --line2:#2f3641;
+         --tx:#e8ebf0; --tx2:#98a2b3; --tx3:#69717f; --accent:#5b8def; --bad:#f2666b; }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:var(--bg);color:var(--tx);display:grid;place-items:center;
+    font:14px/1.65 "Pretendard","Malgun Gothic",-apple-system,system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .box{width:min(380px,92vw);background:var(--panel);border:1px solid var(--line);
+    border-radius:14px;padding:28px 26px}
+  h1{margin:0;font-size:16px;letter-spacing:-.2px}
+  .co{color:var(--tx2);font-size:12px;margin-top:4px}
+  .why{color:var(--tx3);font-size:12px;line-height:1.7;margin:18px 0 16px;
+    border-top:1px solid var(--line);padding-top:16px}
+  label{display:block;font-size:12px;color:var(--tx2);margin-bottom:6px}
+  input{width:100%;background:var(--sunk);border:1px solid var(--line);color:var(--tx);
+    border-radius:8px;padding:11px 12px;font-size:14px;font-family:inherit}
+  input:focus{outline:none;border-color:var(--accent)}
+  button{width:100%;margin-top:12px;background:var(--accent);color:#fff;border:0;border-radius:8px;
+    padding:11px 16px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit}
+  button:hover:not(:disabled){filter:brightness(1.08)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .err{color:var(--bad);font-size:12.5px;margin-top:10px;min-height:18px}
+</style>
+</head>
+<body>
+  <form class="box" id="f">
+    <h1>proto-rem</h1>
+    <div class="co">㈜에이톰엔지니어링 아웃바운드 콘솔</div>
+    <div class="why">
+      이 화면에는 <b>명함(개인정보)</b>과 발송 설정이 들어 있어 사내에서도 아무나 열 수 없게 잠가 두었습니다.
+      비밀번호는 관리자가 <code>APP_PASSWORD</code> 로 정합니다.
+    </div>
+    <label for="pw">비밀번호</label>
+    <input id="pw" type="password" autocomplete="current-password" autofocus>
+    <button id="go" type="submit">들어가기</button>
+    <div class="err" id="err"></div>
+  </form>
+<script>
+  const f = document.getElementById('f');
+  const pw = document.getElementById('pw');
+  const go = document.getElementById('go');
+  const err = document.getElementById('err');
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    err.textContent = '';
+    go.disabled = true;
+    try {
+      const r = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password: pw.value }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.ok) { location.replace('/'); return; }
+      err.textContent = j.error || '로그인하지 못했습니다.';
+      pw.select();
+    } catch (e2) {
+      err.textContent = '서버에 연결하지 못했습니다. ' + e2.message;
+    }
+    go.disabled = false;
+  };
+</script>
+</body>
+</html>
