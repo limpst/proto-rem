@@ -35,6 +35,9 @@ def smtp_status() -> dict:
         "user": re.sub(r"(.{2}).*(@.*)", r"\1***\2", user) if user else None,
         "dryRun": env("DRY_RUN") == "1",
         "redirectTo": env("TEST_REDIRECT_TO") or None,
+        # 화면의 [테스트 메일 보내기] 받는 사람 기본값.
+        # user 는 가려진 값(hy***@...)이라 그대로는 보낼 수 없다.
+        "testTo": env("TEST_SEND_TO") or env("GMAIL_USER") or "",
     }
 
 

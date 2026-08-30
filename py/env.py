@@ -114,6 +114,12 @@ ENV_SPEC = [
         "why": "⚠ 실전 발송 전에는 반드시 비우세요. 비우지 않으면 고객에게 한 통도 가지 않습니다.",
     },
     {
+        "key": "TEST_SEND_TO", "group": "메일 발송", "label": "테스트 메일 받는 사람",
+        "secret": False, "placeholder": "atom@atom-eng.co.kr",
+        "what": "STEP 7 의 [테스트 메일 보내기] 화면에 처음 채워 둘 주소입니다.",
+        "why": "매번 손으로 적지 않아도 되게 합니다. 보낼 때 다른 주소로 바꿔도 됩니다.",
+    },
+    {
         "key": "ALLOW_NIGHT_SEND", "group": "메일 발송", "label": "야간 발송 허용", "type": "bool",
         "secret": False, "placeholder": "0",
         "what": "1이면 밤 9시~아침 8시에도 발송합니다. 비워두면 그 시간대는 차단됩니다.",

@@ -1157,7 +1157,7 @@ atom@atom-eng.co.kr"
         <input class="inp" value="${esc(S.smtp?.user ?? '미설정')}" disabled
           title="보내는 주소는 .env 의 GMAIL_USER 로 고정됩니다. 화면에서는 바꿀 수 없습니다.">
         <label class="muted" style="font-size:11.5px">받는 사람</label>
-        <input class="inp" id="tsTo" placeholder="test@example.com" value="${esc(S.smtp?.user ?? '')}"
+        <input class="inp" id="tsTo" placeholder="test@example.com" value="${esc(S.smtp?.testTo ?? '')}"
           title="테스트 메일을 받을 주소입니다. 본인 주소를 넣어 스팸함 도착 여부까지 확인해 보세요.">
         <label class="muted" style="font-size:11.5px">제목</label>
         <input class="inp" id="tsSubject" value="테스트 발송 — 에이톰엔지니어링"
