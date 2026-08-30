@@ -24,3 +24,8 @@ node_modules/
 Thumbs.db
 .idea/
 .vscode/
+
+# Playwright 로그인 세션 (절대 커밋 금지)
+.auth/
+playwright-report/
+test-results/
