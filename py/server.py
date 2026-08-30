@@ -29,6 +29,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import classify_ai, copy_ai, deliver, enrich, generate, llm, normalize, resolve
 from . import sector_fallback as SF
+from . import site_store as SITE
 from . import upsert as UP
 from . import paths
 from . import store
@@ -436,6 +437,46 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
             c["siteResolve"] = {"via": "manual" if u else "none", "tried": []}
         return 200, full_state(store.update(apply))
 
+    # --- 홈페이지 분석 보관본 -----------------------------------------------
+    if path == "/api/site-store" and method == "GET":
+        return 200, SITE.summary()
+
+    if path == "/api/site-store" and method == "POST":
+        # 특정 회사만 다시 분석하고 싶을 때 보관본을 지운다
+        if body.get("forget"):
+            return 200, {"ok": SITE.forget(body["forget"]), **SITE.summary()}
+        return 200, SITE.summary()
+
+    # --- 3-b. 리서치 건너뛰기 -------------------------------------------------
+    # 저장된 분석이 있으면 그것으로 채우고 STEP 3 을 통과시킨다.
+    # 매번 홈페이지를 다시 읽을 이유가 없다는 요구를 그대로 구현한 것.
+    if path == "/api/enrich-skip" and method == "POST":
+        used = missing = 0
+
+        def apply(st):
+            nonlocal used, missing
+            for c in st["cards"]:
+                if c.get("excluded") or c.get("segmentId") == "internal":
+                    continue
+                if (c.get("signals") or {}).get("facts"):
+                    used += 1
+                    continue
+                saved = SITE.get(c.get("siteUrl"), st)
+                if saved:
+                    c["siteFetch"] = {**(saved.get("fetch") or {}), "fromStore": True}
+                    c["signals"] = saved.get("signals") or {}
+                    c["status"] = "ENRICHED"
+                    used += 1
+                else:
+                    # 보관본도 없으면 업종 표준값으로 채운다. 여기서 멈추지 않는다.
+                    c["signals"] = SF.signals_for(c.get("segmentId"), "저장된 분석 없음 (건너뛰기)")
+                    c["status"] = "ENRICHED"
+                    missing += 1
+            st["step"] = 3
+        st2 = store.update(apply)
+        L.log("ok", "enrich", f"리서치 건너뜀 — 보관본 {used}건 · 업종 표준값 {missing}건")
+        return 200, full_state(st2, skipped={"used": used, "fallback": missing})
+
     # --- 시나리오 실행 기록 -------------------------------------------------
     # 화면 메모리에만 두면 새로고침에 사라진다. 어제 돌린 결과를 오늘 다시
     # 봐야 하는 일이 잦으므로 DB(meta)에 남긴다.
@@ -503,6 +544,21 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
 
         def work(job_id: str):
             cur = store.load()
+            # 업종 표준값은 고객군을 알아야 고를 수 있는데, 분류는 4단계라 아직 안 돌았다.
+            # 그대로 두면 리서치가 실패했을 때 대체값이 빈 목록이 되어 대체의 의미가 없다.
+            # 회사명 키워드 분류는 AI 를 쓰지 않아 즉시 끝나므로 여기서 먼저 채워 둔다.
+            # (4단계에서 사람이 다시 바꿀 수 있고, AI 분류도 그때 덧씌운다.)
+            pre = 0
+            for c in cur["cards"]:
+                if not c.get("segmentId") or c["segmentId"] == "unclassified":
+                    r = classify(c)
+                    if r["segmentId"] not in ("unclassified", "excluded"):
+                        c["segmentId"] = r["segmentId"]
+                        c["segmentSource"] = "keyword"
+                        pre += 1
+            if pre:
+                L.log("info", "enrich", f"표준값을 고르기 위해 {pre}건을 키워드로 미리 분류했습니다")
+                store.save(cur)
             if not cur.get("sourceProfile"):
                 cur["sourceProfile"] = enrich.build_source_profile()
                 store.save(cur)
@@ -530,6 +586,26 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
                     return
                 _job_set(job_id, current=t.get("company") or t.get("name"), done=i)
                 url_key = (t.get("siteUrl") or "").strip().lower()
+                # 지난 실행에서 이미 분석해 둔 회사면 그대로 쓴다.
+                # 회사 홈페이지는 하루 이틀에 바뀌지 않는다. 다시 읽을 이유가 없고,
+                # 상대 서버에도 반복 부담이다. (기한·강제 재분석은 site_store 가 판단)
+                if not body.get("force"):
+                    saved = SITE.get(t.get("siteUrl"))
+                    if saved:
+                        cur = store.load()
+                        c = _card(cur, t["id"])
+                        if c is not None:
+                            c["siteFetch"] = {**(saved.get("fetch") or {}), "fromStore": True}
+                            c["signals"] = saved.get("signals") or {}
+                            c["status"] = "ENRICHED"
+                        cur["step"] = 3
+                        store.save(cur)
+                        _job_set(job_id, done=i + 1)
+                        L.log("ok", "enrich",
+                              f"{t.get('company')} — 저장된 분석 재사용 "
+                              f"({round(float(saved.get('savedAt', 0)) and (time.time()-float(saved['savedAt']))/3600 or 0, 1)}시간 전)")
+                        continue
+
                 if url_key and url_key in seen_site:
                     site = seen_site[url_key]
                 else:
@@ -552,6 +628,8 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
                     signals = SF.signals_for(
                         t.get("segmentId"),
                         f"홈페이지 본문 {len(site.get('text') or '')}자 (자바스크립트 렌더링 등)")
+                    # 이번에 분석한 결과를 보관한다. 다음 실행에서 같은 회사는 다시 읽지 않는다.
+                    SITE.put(t.get("siteUrl"), site, signals)
                     cur = store.load()
                     c = _card(cur, t["id"])
                     if c is not None:

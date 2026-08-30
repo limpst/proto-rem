@@ -518,8 +518,10 @@ const PRIMARY = {
   resolve: () => `<div class="row">
       <button data-act="resolvesites" title="${T.resolvesites}">홈페이지 자동 찾기</button></div>`,
   enrich: x => `<div class="row">
-      <button data-act="enrich" ${x.site ? '' : 'disabled'}
-        title="${x.site ? T.enrich : '홈페이지 주소가 하나도 없어 실행할 수 없습니다. STEP 2 에서 먼저 확보하세요.'}">전체 리서치 실행</button>
+      <button data-act="enrich-skip"
+        title="홈페이지를 다시 읽지 않습니다. 지난 실행에서 저장해 둔 분석이 있으면 그것을 쓰고, 없으면 업종 표준값으로 채웁니다. 즉시 끝납니다.">저장된 분석으로 건너뛰기</button>
+      <button class="ghost" data-act="enrich" ${x.site ? '' : 'disabled'}
+        title="${x.site ? T.enrich : '홈페이지 주소가 하나도 없어 실행할 수 없습니다. STEP 2 에서 먼저 확보하세요.'}">홈페이지 새로 읽기</button>
       <button class="ghost" data-act="prompt" title="${T.prompt}">AI 에게 보낼 지시문 미리보기</button></div>`,
   segment: x => `<div class="row">
       <button data-act="segment" title="${T.segment}">고객군 분류 (규칙)</button>
@@ -1463,6 +1465,14 @@ function bind() {
     reset: () => confirm('가져온 명함과 만든 메일이 모두 지워집니다. 계속할까요?')
       ? api('/api/reset', {}) : api('/api/state'),
     enrich: async () => { await runJob('/api/enrich', {}, '홈페이지 리서치'); return null; },
+    'enrich-skip': async () => {
+      const r = await api('/api/enrich-skip', {});
+      if (r.error) { toast(r.error, true); return null; }
+      const k = r.skipped ?? {};
+      toast(`리서치를 건너뛰었습니다.
+저장된 분석 ${k.used ?? 0}건 · 업종 표준값 ${k.fallback ?? 0}건`);
+      return r;
+    },
     segment: () => api('/api/segment', {}),
     segmentai: () => api('/api/segment', { useAi: true }),
     interests: () => api('/api/interests', {}),
@@ -2059,6 +2069,11 @@ const SC_RUN = {
   },
 
   async enrich() {
+    // 이미 근거가 다 있으면 다시 읽지 않는다. 회사 홈페이지는 매번 바뀌지 않는다.
+    const before = stats();
+    if (before.facts >= before.usable.length && before.usable.length > 0) {
+      return `근거 ${before.facts}건 (저장된 분석 사용 — 리서치 생략)`;
+    }
     const j = await runJob('/api/enrich', {}, 'STEP 3 · 홈페이지 리서치');
     const x = stats();
     const sector = (S.cards ?? []).filter(c => c.signals?.kind === 'sector').length;
