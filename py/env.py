@@ -149,6 +149,14 @@ ENV_SPEC = [
                "길게 잡으면 로컬에서 끝까지 시도합니다.",
     },
     {
+        "key": "DEFAULT_SEGMENT", "group": "AI", "label": "미분류 대체 고객군",
+        "secret": False, "placeholder": "safety",
+        "what": "회사 업종을 끝내 못 알아낸 명함을 어느 고객군으로 볼지입니다. 비워두면 미분류로 남습니다.",
+        "why": "미분류는 발송 대상에서 빠집니다. 값을 넣으면 파이프라인이 멈추지 않고 끝까지 가지만, "
+               "엉뚱한 업종에 엉뚱한 메일이 갈 수 있으므로 검토 단계에서 반드시 확인하세요. "
+               "화면에는 '기본값 대체'로 표시됩니다.",
+    },
+    {
         "key": "OLLAMA_MODEL", "group": "AI", "label": "Ollama 모델",
         "secret": False, "placeholder": "exaone3.5:7.8b",
         "what": "로컬 AI 를 쓸 때 어떤 모델을 쓸지 지정합니다.",

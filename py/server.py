@@ -309,6 +309,10 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
         jid = _job_new("resolve", len(targets))
 
         def work(job_id: str):
+            # 같은 회사 명함이 여러 장이면 홈페이지도 한 곳이다. 명함 수만큼 찾으면
+            # 같은 주소를 반복해서 조회하고 AI 추정까지 여러 번 부른다(에이톰 5장 = 5회).
+            # 회사명 기준으로 한 번만 찾아 나머지 장에 그대로 나눠 준다.
+            done_by_company: dict[str, dict] = {}
             for i, t in enumerate(targets):
                 _job_set(job_id, current=t.get("company") or t.get("name"), done=i)
                 cur = store.load()
@@ -318,12 +322,19 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
                 if c.get("siteUrl") and (c.get("siteResolve") or {}).get("via") == "card":
                     _job_set(job_id, done=i + 1)
                     continue
-                try:
-                    r = resolve.resolve_site(c)
-                except Exception as e:
-                    # 한 회사를 못 찾아도 나머지는 계속 찾는다. 빈 값이 곧 기본값이다.
-                    _job_fail_item(job_id, t.get("company") or t.get("name"), e)
-                    r = {"siteUrl": "", "via": "none", "tried": []}
+                key = (c.get("company") or "").strip().lower()
+                if key and key in done_by_company:
+                    r = dict(done_by_company[key])
+                    r["via"] = "same-company"      # 같은 회사의 결과를 물려받았다
+                else:
+                    try:
+                        r = resolve.resolve_site(c)
+                    except Exception as e:
+                        # 한 회사를 못 찾아도 나머지는 계속 찾는다. 빈 값이 곧 기본값이다.
+                        _job_fail_item(job_id, t.get("company") or t.get("name"), e)
+                        r = {"siteUrl": "", "via": "none", "tried": []}
+                    if key:
+                        done_by_company[key] = r
                 c["siteUrl"] = r["siteUrl"]
                 c["siteResolve"] = {"via": r["via"], "tried": r["tried"]}
                 c["resolved"] = bool(r["siteUrl"])
@@ -347,6 +358,25 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
             c["siteUrl"] = (u if u.startswith("http") else f"https://{u}") if u else ""
             c["siteResolve"] = {"via": "manual" if u else "none", "tried": []}
         return 200, full_state(store.update(apply))
+
+    # --- 시나리오 실행 기록 -------------------------------------------------
+    # 화면 메모리에만 두면 새로고침에 사라진다. 어제 돌린 결과를 오늘 다시
+    # 봐야 하는 일이 잦으므로 DB(meta)에 남긴다.
+    if path == "/api/scenario" and method == "POST":
+        run = body.get("run") or {}
+
+        def apply(st):
+            st["scenarioRun"] = {
+                "results": run.get("results") or {},
+                "startedAt": run.get("startedAt"),
+                "finishedAt": run.get("finishedAt"),
+                "status": run.get("status") or "running",
+                "savedAt": time.time(),
+            }
+        return 200, full_state(store.update(apply))
+
+    if path == "/api/scenario" and method == "GET":
+        return 200, {"run": store.load().get("scenarioRun")}
 
     # --- 관리자 설정 (톱니바퀴) ---------------------------------------------
     # .env 를 화면에서 직접 읽고 고친다. 이 서버에는 로그인이 없으므로
@@ -395,13 +425,23 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
             if not cur.get("sourceProfile"):
                 cur["sourceProfile"] = enrich.build_source_profile()
                 store.save(cur)
+            # 같은 주소를 명함 수만큼 읽으면 상대 서버에도 부담이고 AI 비용도 그만큼 든다.
+            # 주소 하나당 한 번만 읽고, 뽑아낸 근거는 같은 주소·같은 고객군끼리 나눠 쓴다.
+            seen_site: dict[str, dict] = {}
+            seen_signals: dict[tuple, dict] = {}
             for i, t in enumerate(targets):
                 _job_set(job_id, current=t.get("company") or t.get("name"), done=i)
-                try:
-                    site = enrich.fetch_site(t.get("siteUrl"))
-                except Exception as e:
-                    _job_fail_item(job_id, t.get("company") or t.get("name"), e)
-                    site = {"ok": False, "reason": f"fetch-error: {e}"[:80], "text": ""}
+                url_key = (t.get("siteUrl") or "").strip().lower()
+                if url_key and url_key in seen_site:
+                    site = seen_site[url_key]
+                else:
+                    try:
+                        site = enrich.fetch_site(t.get("siteUrl"))
+                    except Exception as e:
+                        _job_fail_item(job_id, t.get("company") or t.get("name"), e)
+                        site = {"ok": False, "reason": f"fetch-error: {e}"[:80], "text": ""}
+                    if url_key:
+                        seen_site[url_key] = site
                 # 본문이 비었으면 AI 를 부르지 않는다.
                 # 읽은 게 없는데 회사명만 보고 "안전진단 서비스 제공" 같은 문장을 지어내면,
                 # 그게 화면에 "확인된 사실" 로 올라가 그대로 메일에 인용된다.
@@ -426,12 +466,18 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
                     _job_set(job_id, done=i + 1)
                     continue
 
-                try:
-                    signals = enrich.extract_signals(t, site["text"])
-                except Exception as e:
-                    # AI 가 실패해도 파이프라인은 멈추지 않는다. 업종 일반 특성으로 대체한다.
-                    _job_fail_item(job_id, t.get("company") or t.get("name"), e)
-                    signals = SF.signals_for(t.get("segmentId"), f"{type(e).__name__}")
+                sig_key = (url_key, t.get("segmentId"))
+                if url_key and sig_key in seen_signals:
+                    signals = seen_signals[sig_key]        # 같은 회사 = 같은 근거
+                else:
+                    try:
+                        signals = enrich.extract_signals(t, site["text"])
+                    except Exception as e:
+                        # AI 가 실패해도 파이프라인은 멈추지 않는다. 업종 일반 특성으로 대체한다.
+                        _job_fail_item(job_id, t.get("company") or t.get("name"), e)
+                        signals = SF.signals_for(t.get("segmentId"), f"{type(e).__name__}")
+                    if url_key:
+                        seen_signals[sig_key] = signals
 
                 # AI 는 성공했는데 건질 사실이 없는 경우(자바스크립트 렌더링 사이트 등)도
                 # 같은 취급을 한다. 근거 0개로 두면 그 대상만 통째로 빠진다.
@@ -500,6 +546,29 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
                 c["segmentSource"] = None if r["segmentId"] == "unclassified" else "ai"
                 c["segmentAi"] = {"confidence": r["confidence"], "reason": r["reason"]}
             st = store.save(st)
+
+        # 끝내 분류되지 않은 명함을 기본 고객군으로 대체한다.
+        # 미분류는 발송 대상에서 빠져 파이프라인이 거기서 끊긴다.
+        # 대신 segmentSource='fallback' 으로 표시해 검토에서 구분되게 한다.
+        # 기본값은 '대체함' 이다. 미분류로 두면 그 명함은 발송 대상에서 통째로 빠져
+        # 5~7단계가 아예 열리지 않는다(대상 0건). fallback:false 로 끔 수 있다.
+        if body.get("fallback", True):
+            default_seg = body.get("defaultSegment") or env("DEFAULT_SEGMENT") or "office"
+
+            if default_seg and seg_of(default_seg):
+                def apply_fb(st):
+                    n = 0
+                    for c in st["cards"]:
+                        if c.get("excluded") or c.get("segmentId") != "unclassified":
+                            continue
+                        c["segmentId"] = default_seg
+                        c["segmentSource"] = "fallback"
+                        n += 1
+                    if n:
+                        L.log("warn", "segment",
+                              f"미분류 {n}건을 기본 고객군 '{default_seg}' 으로 대체했습니다")
+                store.update(apply_fb)
+                return 200, full_state(store.load())
         return 200, full_state(st)
 
     # --- 4-a2. 고객군 수동 지정 --------------------------------------------
@@ -890,6 +959,19 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
             sent_results = []
             for i, c0 in enumerate(approved):
                 _job_set(job_id, current=f"{c0.get('name')} · {c0.get('company')}", done=i)
+                if not c0.get("email"):
+                    # 주소는 지어낼 수 없다. 실패로 기록하면 이력이 빨갛게 뒤덮여
+                    # 진짜 실패(인증 오류 등)가 묻힌다. 건너뛴 것으로 남긴다.
+                    def skip(st2, cid=c0["id"]):
+                        t2 = _card(st2, cid)
+                        if t2:
+                            t2["status"] = "NO_EMAIL"
+                            t2["deliverError"] = "수신 이메일 주소 없음 — 발송 이력에서 [수정]으로 넣으세요"
+                    store.update(skip)
+                    sent_results.append({"id": c0["id"], "to": "", "sent": False,
+                                         "note": "건너뜀 — 수신 주소 없음"})
+                    _job_set(job_id, done=i + 1, results=sent_results)
+                    continue
                 try:
                     r = deliver.send_email(c0.get("email"), c0["message"].get("subject"),
                                            c0["message"].get("body"))

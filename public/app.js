@@ -612,8 +612,12 @@ const cardRows = (cards, { pick = true } = {}) => !cards.length
         : c.segmentId === 'internal' ? '<span class="tag warn">자사</span>'
         : c.segmentId && c.segmentId !== 'unclassified'
           ? `<span class="tag seg">${esc(seg(c.segmentId)?.label ?? c.segmentId)}</span>`
-            + srcTag(c.segmentSource === 'ai' ? 'ai' : 'calc',
-                     c.segmentSource === 'ai' ? `확신도 ${c.segmentAi?.confidence ?? '-'}` : '회사명 키워드로 판정')
+            + srcTag(c.segmentSource === 'ai' ? 'ai' : c.segmentSource === 'fallback' ? 'ai' : 'calc',
+                     c.segmentSource === 'ai' ? `확신도 ${c.segmentAi?.confidence ?? '-'}`
+                     : c.segmentSource === 'fallback' ? '업종을 못 알아내 기본 고객군으로 대체 — 검토에서 확인하세요'
+                     : '회사명 키워드로 판정')
+            + (c.segmentSource === 'fallback'
+                ? '<span class="tag warn" style="margin-left:5px;font-size:10px">기본값 대체</span>' : '')
           : '<span class="tag">미분류</span>'}
         ${c.segmentSource === 'ai' && c.segmentAi?.reason
           ? `<div class="muted" style="font-size:10.5px;margin-top:4px">${esc(c.segmentAi.reason)}</div>` : ''}
@@ -1725,6 +1729,7 @@ function initConsole() {
   initConsole();
   initBrand();
   adopt(await api('/api/state'));
+  scRestore();
   render();
   initBrand();   // render 가 DOM 을 갈아엎어도 로고 클릭은 살아 있어야 한다
   loadPalette();
@@ -1785,6 +1790,26 @@ const SC_STEPS = [
   { n: 7, key: 'deliver',  label: '발송',        comp: '큐 적재 (dry-run)' },
 ];
 
+/* 실행 기록을 DB 에 남긴다. 새로고침해도 지난 결과가 그대로 보여야 한다. */
+async function scSave(status) {
+  try {
+    await api('/api/scenario', {
+      run: { results: SC.results, startedAt: SC.startedAt,
+             finishedAt: status === 'running' ? null : Date.now(), status },
+    });
+  } catch { /* 저장 실패가 실행을 막지는 않는다 */ }
+}
+
+/** 서버에 저장된 지난 실행 결과를 화면 상태로 되살린다. */
+function scRestore() {
+  const run = S?.scenarioRun;
+  if (!run || SC.running) return;
+  SC.results = run.results ?? {};
+  SC.startedAt = run.startedAt ?? null;
+  SC.finishedAt = run.finishedAt ?? null;
+  SC.lastStatus = run.status ?? null;
+}
+
 function scPaint(msg) {
   render(msg);
   const el = document.querySelector('#flowdiag');
@@ -1808,8 +1833,10 @@ async function runScenario() {
       try {
         const msg = await SC_RUN[s.key]();
         mark(s.n, 'ok', msg, t() - t0);
+        await scSave('running');
       } catch (e) {
         mark(s.n, 'fail', String(e.message ?? e), t() - t0);
+        await scSave('failed');
         SC.current = null;
         SC.running = false;
         scPaint();
@@ -1819,6 +1846,7 @@ async function runScenario() {
     }
     SC.current = null;
     SC.running = false;
+    await scSave('done');
     scPaint();
     const total = ((Date.now() - SC.startedAt) / 1000).toFixed(0);
     toast(`1~7단계 전부 통과했습니다. (${total}초)\n실제 메일은 나가지 않았습니다 — 큐 적재까지만 했습니다.`);
@@ -1834,8 +1862,15 @@ const SC_RUN = {
     const r = await api('/api/ingest', {});
     if (r.error) throw new Error(r.error);
     adopt(r);
-    const n = (r.cards ?? []).length;
-    if (!n) throw new Error('명함이 0건입니다. STEP 1 에서 먼저 가져오세요.');
+    let n = (r.cards ?? []).length;
+    if (!n) {
+      // 명함이 없으면 시드 샘플로라도 채워 다음 단계로 간다.
+      // 여기서 멈추면 나머지 6단계를 아예 확인할 수 없다.
+      log('warn', '작업', 'STEP 1 — 명함이 없어 샘플 시드로 대체합니다');
+      const seed = await api('/api/ingest', { mode: 'replace' });
+      if (!seed.error) { adopt(seed); n = (seed.cards ?? []).length; }
+      if (!n) throw new Error('명함을 하나도 확보하지 못했습니다.');
+    }
     const u = r.upsert;
     return `${n}건` + (u ? ` (추가 ${u.inserted} · 갱신 ${u.updated} · 변화없음 ${u.unchanged})` : '');
   },
@@ -1875,6 +1910,12 @@ const SC_RUN = {
     if (stats().usable.some(c => c.segmentId === 'unclassified')) {
       r = await api('/api/segment', { useAi: true });
       if (!r.error) adopt(r);
+    }
+    // 그래도 미분류가 남으면 기본 고객군으로 대체한다.
+    // 여기서 멈추면 5~7단계를 확인할 수 없다. 대체분은 '기본값 대체'로 표시된다.
+    if (stats().usable.some(c => c.segmentId === 'unclassified')) {
+      const fb = await api('/api/segment', { fallback: true, defaultSegment: 'safety' });
+      if (!fb.error) { adopt(fb); log('warn', '작업', 'STEP 4 — 미분류를 기본 고객군으로 대체'); }
     }
     const ids = stats().usable
       .filter(c => c.segmentId && !['unclassified', 'internal', 'excluded'].includes(c.segmentId))
@@ -1951,6 +1992,12 @@ function flowDiagram() {
         ${Object.keys(SC.results).length && !SC.running
           ? `<button class="ghost sm" data-act="scenario-clear">결과 지우기</button>` : ''}
         <span class="muted" style="font-size:11.5px">실제 발송은 하지 않습니다 — 7단계는 큐 적재까지만</span>
+        ${S.scenarioRun?.finishedAt && !SC.running ? `
+          <span class="tag ${S.scenarioRun.status === 'done' ? 'ok' : 'bad'}" style="margin-left:auto"
+            title="새로고침해도 지난 실행 결과는 그대로 남아 있습니다 (파일 DB 저장)">
+            지난 실행 ${new Date(S.scenarioRun.finishedAt).toLocaleString('ko-KR',
+              { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+            · ${S.scenarioRun.status === 'done' ? '전 구간 통과' : '중단됨'}</span>` : ''}
       </div>
       <div class="fchain">${SC_STEPS.map((s, i) =>
         node(s) + (i < SC_STEPS.length - 1 ? '<div class="farrow">→</div>' : '')).join('')}</div>
