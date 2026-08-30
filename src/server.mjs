@@ -1,43 +1,57 @@
 /**
  * 7단계 파이프라인 프로토타입 서버.
- * HITL 게이트: 4단계(대상 선택), 6단계(메시지 승인) — 이 두 곳은 사람 없이 넘어가지 않는다.
+ * HITL 게이트 3곳: STEP2(발송 모드), STEP4(대상 선택), STEP6(문안 승인).
  *   npm start  ->  http://localhost:5173
  */
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 import { load, save, update } from './store.mjs';
 import { SEGMENTS, COMPANY, classify } from './domain.mjs';
 import { fetchSite, extractSignals, buildSourceProfile } from './enrich.mjs';
-import { spawn } from 'node:child_process';
-import { generateMessage } from './generate.mjs';
+import {
+  generateMessage, generateSegmentTemplate, renderTemplate,
+  buildPrompt, buildSegmentPrompt, PERSONAS,
+} from './generate.mjs';
+import { resolveBackend } from './llm.mjs';
+import { sendEmail, smtpStatus } from './deliver.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = process.env.PORT || 5173;
 
 export const STEPS = [
-  { n: 1, id: 'ingest',   label: '명함 수집',     hitl: false, desc: '리멤버/CSV에서 명함을 가져온다' },
-  { n: 2, id: 'resolve',  label: '회사 식별',     hitl: false, desc: '회사명 정규화 + 홈페이지 URL 확정' },
-  { n: 3, id: 'enrich',   label: '홈페이지 리서치', hitl: false, desc: '홈페이지를 읽어 근거 사실 추출' },
-  { n: 4, id: 'segment',  label: '고객군 선택',   hitl: true,  desc: '세그먼트 자동 분류 → 사람이 발송 대상 확정' },
-  { n: 5, id: 'generate', label: '카피 생성',     hitl: false, desc: '세그먼트별 프롬프트로 1:1 메시지 생성' },
-  { n: 6, id: 'review',   label: '검토·승인',     hitl: true,  desc: '사람이 문안 수정 후 승인/반려' },
-  { n: 7, id: 'deliver',  label: '발송·추적',     hitl: false, desc: '승인 건만 발송, 이력·응답 기록' },
+  { n: 1, id: 'ingest',   label: '명함 수집',      hitl: false, desc: '리멤버/CSV에서 명함을 가져온다' },
+  { n: 2, id: 'resolve',  label: '발신·발송모드',   hitl: true,  desc: '발신은 에이톰엔지니어링 고정. 발신자 역할과 1:1 / 1:N 을 사람이 선택한다' },
+  { n: 3, id: 'enrich',   label: '홈페이지 분석',   hitl: false, desc: 'source(자사)·target(고객) 홈페이지를 읽어 근거를 뽑고, 그 근거로 프롬프트를 조립한다' },
+  { n: 4, id: 'segment',  label: '고객군 선택',     hitl: true,  desc: '고객군 자동 분류 → 사람이 발송 대상 확정' },
+  { n: 5, id: 'generate', label: '카피 생성',      hitl: false, desc: '조립된 프롬프트로 문안 생성' },
+  { n: 6, id: 'review',   label: '검토·승인',      hitl: true,  desc: '사람이 문안 수정 후 승인/반려' },
+  { n: 7, id: 'deliver',  label: '발송·추적',      hitl: false, desc: '승인 건만 발송, 이력·응답 기록' },
 ];
 
 const json = (res, code, body) => {
   res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(body));
 };
-const readBody = req => new Promise(r => { let b = ''; req.on('data', c => b += c); req.on('end', () => r(b ? JSON.parse(b) : {})); });
+const readBody = req => new Promise(r => {
+  let b = ''; req.on('data', c => b += c); req.on('end', () => r(b ? JSON.parse(b) : {}));
+});
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const p = url.pathname;
 
   try {
-    if (p === '/api/state') return json(res, 200, { ...load(), steps: STEPS, segments: SEGMENTS, company: COMPANY });
+    if (p === '/api/state') {
+      return json(res, 200, {
+        ...load(), steps: STEPS, segments: SEGMENTS, company: COMPANY,
+        personas: PERSONAS,
+        backend: await resolveBackend(),
+        smtp: smtpStatus(),
+      });
+    }
 
     if (p === '/api/reset' && req.method === 'POST') {
       fs.rmSync(path.join(ROOT, 'data', 'state.json'), { force: true });
@@ -62,40 +76,44 @@ const server = http.createServer(async (req, res) => {
 
     // --- 1-b. 자사(에이톰) 홈페이지 프로파일 ------------------------------
     if (p === '/api/source-profile' && req.method === 'POST') {
-      const profile = await buildSourceProfile();
+      const profile = await buildSourceProfile({ force: true });
       return json(res, 200, update(st => { st.sourceProfile = profile; }));
     }
 
     // --- 1. 수집 -------------------------------------------------------
     if (p === '/api/ingest' && req.method === 'POST') {
-      const s = update(st => {
+      return json(res, 200, update(st => {
         const seed = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'seed-cards.json'), 'utf8'));
         const exported = path.join(ROOT, 'data', 'cards.json');
-        const src = fs.existsSync(exported) ? JSON.parse(fs.readFileSync(exported, 'utf8')) : seed;
+        const hasExport = fs.existsSync(exported);
+        const src = hasExport ? JSON.parse(fs.readFileSync(exported, 'utf8')) : seed;
         st.cards = src.map(c => ({ ...c, status: 'NEW' }));
-        st.source = fs.existsSync(exported) ? 'remember-export' : 'seed-sample';
+        st.source = hasExport ? 'remember-export' : 'seed-sample';
         st.step = 1;
-      });
-      return json(res, 200, s);
+      }));
     }
 
-    // --- 2. 회사 식별 ---------------------------------------------------
-    if (p === '/api/resolve' && req.method === 'POST') {
-      const s = update(st => {
+    // --- 2. 발신 설정 + 발송 모드 (HITL) ---------------------------------
+    if (p === '/api/mode' && req.method === 'POST') {
+      const { mode, personaId } = await readBody(req);
+      return json(res, 200, update(st => {
+        if (mode) st.mode = mode === '1:N' ? '1:N' : '1:1';
+        if (personaId) st.personaId = personaId;
+        // 홈페이지 URL 확정도 이 단계에서 함께 처리한다
         for (const c of st.cards) {
           c.siteUrl = c.site || '';
           c.resolved = Boolean(c.siteUrl);
-          c.status = 'RESOLVED';
+          if (c.status === 'NEW') c.status = 'RESOLVED';
         }
         st.step = 2;
-      });
-      return json(res, 200, s);
+      }));
     }
 
     // --- 3. 리서치 ------------------------------------------------------
     if (p === '/api/enrich' && req.method === 'POST') {
       const { ids } = await readBody(req);
       const st = load();
+      if (!st.sourceProfile) st.sourceProfile = await buildSourceProfile();
       const targets = st.cards.filter(c => !ids?.length || ids.includes(c.id));
       for (const c of targets) {
         const site = await fetchSite(c.siteUrl);
@@ -107,9 +125,30 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, save(st));
     }
 
-    // --- 4. 세그먼트 분류 (HITL 선택은 /api/selection) -------------------
+    // --- 3-b. 프롬프트 미리보기 (생성하지 않고 프롬프트 원문만 조립) -------
+    if (p === '/api/prompt-preview' && req.method === 'POST') {
+      const { id, segmentId, channel = 'email' } = await readBody(req);
+      const st = load();
+      const common = { channel, personaId: st.personaId, sourceProfile: st.sourceProfile };
+
+      if (st.mode === '1:N' || !id) {
+        const segment = SEGMENTS.find(s => s.id === (segmentId ?? st.cards.find(c => c.segmentId)?.segmentId));
+        if (!segment) return json(res, 200, { prompt: '', note: '고객군을 먼저 분류하세요 (STEP 4).' });
+        return json(res, 200, { mode: '1:N', segment: segment.label, prompt: buildSegmentPrompt({ segment, ...common }) });
+      }
+
+      const card = st.cards.find(c => c.id === id);
+      const segment = SEGMENTS.find(s => s.id === card?.segmentId);
+      if (!card || !segment) return json(res, 200, { prompt: '', note: '고객군을 먼저 분류하세요 (STEP 4).' });
+      return json(res, 200, {
+        mode: '1:1', target: `${card.name} · ${card.company}`,
+        prompt: buildPrompt({ card, segment, signals: card.signals ?? { facts: [] }, ...common }),
+      });
+    }
+
+    // --- 4. 고객군 분류 + 선택 (HITL) ------------------------------------
     if (p === '/api/segment' && req.method === 'POST') {
-      const s = update(st => {
+      return json(res, 200, update(st => {
         for (const c of st.cards) {
           const { segmentId, score } = classify(c);
           c.segmentId = segmentId;
@@ -117,8 +156,7 @@ const server = http.createServer(async (req, res) => {
           c.status = 'SCORED';
         }
         st.step = 4;
-      });
-      return json(res, 200, s);
+      }));
     }
 
     if (p === '/api/selection' && req.method === 'POST') {
@@ -131,12 +169,28 @@ const server = http.createServer(async (req, res) => {
       const { channel = 'email' } = await readBody(req);
       const st = load();
       const targets = st.cards.filter(c => st.selection.includes(c.id));
-      for (const c of targets) {
-        c.message = await generateMessage({
-          card: c, segmentId: c.segmentId, signals: c.signals ?? { facts: [] }, channel,
-        });
-        c.message.reviewStatus = 'PENDING';
-        c.status = c.message.error ? 'HELD' : 'DRAFTED';
+      const common = { channel, personaId: st.personaId, sourceProfile: st.sourceProfile };
+
+      if (st.mode === '1:N') {
+        // 고객군당 공통 문안 1건 → 수신자별 병합필드 치환
+        st.templates = {};
+        for (const sid of [...new Set(targets.map(c => c.segmentId))]) {
+          st.templates[sid] = await generateSegmentTemplate({ segmentId: sid, ...common });
+        }
+        for (const c of targets) {
+          const tpl = st.templates[c.segmentId];
+          c.message = tpl?.error ? { ...tpl, mode: '1:N' } : renderTemplate(tpl, c, channel);
+          c.message.reviewStatus = 'PENDING';
+          c.status = c.message.error ? 'HELD' : 'DRAFTED';
+        }
+      } else {
+        for (const c of targets) {
+          c.message = await generateMessage({
+            card: c, segmentId: c.segmentId, signals: c.signals ?? { facts: [] }, ...common,
+          });
+          c.message.reviewStatus = 'PENDING';
+          c.status = c.message.error ? 'HELD' : 'DRAFTED';
+        }
       }
       st.step = 5;
       return json(res, 200, save(st));
@@ -156,17 +210,32 @@ const server = http.createServer(async (req, res) => {
       }));
     }
 
-    // --- 7. 발송 (프로토타입: 실제 전송 미연결, 발송 큐에만 적재) ---------
+    // --- 7. 발송 --------------------------------------------------------
+    // 기본은 dry-run(큐 적재만). 실제 Gmail 전송은 confirm:true 가 있을 때만.
     if (p === '/api/deliver' && req.method === 'POST') {
-      return json(res, 200, update(st => {
-        for (const c of st.cards) {
-          if (c.message?.reviewStatus === 'APPROVED') {
-            c.status = 'QUEUED';
-            c.deliveredAt = new Date().toISOString();
-          }
+      const { confirm = false } = await readBody(req);
+      const st = load();
+      const approved = st.cards.filter(c => c.message?.reviewStatus === 'APPROVED');
+      const results = [];
+
+      for (const c of approved) {
+        if (!confirm) {
+          c.status = 'QUEUED';
+          c.queuedAt = new Date().toISOString();
+          results.push({ id: c.id, to: c.email, sent: false, note: 'dry-run (큐 적재만)' });
+          continue;
         }
-        st.step = 7;
-      }));
+        const r = await sendEmail({
+          to: c.email, subject: c.message.subject, body: c.message.body,
+        });
+        c.status = r.ok ? 'SENT' : 'SEND_FAILED';
+        c.deliveredAt = new Date().toISOString();
+        c.deliverError = r.ok ? undefined : r.error;
+        results.push({ id: c.id, to: c.email, sent: r.ok, note: r.ok ? r.messageId : r.error });
+      }
+      st.step = 7;
+      save(st);
+      return json(res, 200, { ...load(), steps: STEPS, segments: SEGMENTS, company: COMPANY, results });
     }
 
     // --- 정적 파일 ------------------------------------------------------

@@ -1,6 +1,8 @@
 const $ = s => document.querySelector(s);
 let S = null, busy = false;
 let viewStep = 1;
+let promptPreview = null;   // STEP 3에서 조립된 프롬프트 원문
+let openPrompts = new Set(); // STEP 5/6에서 펼쳐 본 프롬프트
 
 const api = async (p, body) => {
   const r = await fetch(p, body
@@ -17,13 +19,19 @@ const run = async (label, fn) => {
 };
 
 const seg = id => S.segments.find(s => s.id === id);
-const esc = t => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+const esc = t => String(t ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 function render(loading) {
   if (!S) return;
-  $('#src').textContent = S.source
-    ? `· 데이터 출처: ${S.source === 'remember-export' ? '리멤버 반출' : '샘플 시드'}`
-    : '';
+
+  const b = S.backend ?? {};
+  $('#src').innerHTML =
+    `${S.source ? `· 데이터 ${S.source === 'remember-export' ? '리멤버 반출' : '샘플 시드'}` : ''}
+     · 발송모드 <b style="color:var(--tx)">${esc(S.mode ?? '1:1')}</b>
+     · 명의 <b style="color:var(--tx)">${esc((S.personas ?? []).find(p => p.id === S.personaId)?.label ?? '영업 담당자')}</b>
+     · LLM <b style="color:var(--tx)">${esc(b.name)}${b.model ? ` (${esc(b.model)})` : ''}</b>
+     · 메일 ${S.smtp?.configured ? '<b style="color:var(--ok)">연결됨</b>' : '<span style="color:var(--warn)">미설정</span>'}`;
 
   $('#rail').innerHTML = S.steps.map(s => `
     <div class="st ${viewStep === s.n ? 'active' : ''} ${S.step >= s.n ? 'done' : ''}" data-n="${s.n}">
@@ -36,7 +44,7 @@ function render(loading) {
 
   const step = S.steps.find(s => s.n === viewStep);
   const spinner = loading
-    ? `<div class="spin">${esc(loading)} … Claude 호출 중입니다. 건당 수 초 걸립니다.</div>` : '';
+    ? `<div class="spin">${esc(loading)} … 모델 호출 중입니다. 건당 수 초 걸립니다.</div>` : '';
   $('#view').innerHTML = `<div class="panel"><h2>STEP ${step.n}. ${step.label}</h2>
     <div class="desc">${step.desc}</div>${spinner}${VIEWS[step.id]()}</div>`;
   bind();
@@ -44,7 +52,7 @@ function render(loading) {
 
 const cardRows = cards => `
   <table><thead><tr>
-    <th style="width:26px"></th><th>담당자</th><th>회사</th><th>세그먼트</th><th>리서치 근거</th>
+    <th style="width:26px"></th><th>담당자</th><th>회사</th><th>고객군</th><th>리서치 근거</th>
   </tr></thead><tbody>
   ${cards.map(c => `<tr>
     <td><input type="checkbox" class="pick" value="${c.id}" ${S.selection.includes(c.id) ? 'checked' : ''}></td>
@@ -64,38 +72,79 @@ const VIEWS = {
     <div class="row">
       <button data-act="rexport">리멤버에서 가져오기</button>
       <button data-act="ingest">명함 불러오기</button>
-      <button class="ghost" data-act="source">자사 홈페이지 프로파일</button>
       <button class="ghost" data-act="reset">초기화</button>
     </div>
     <div class="banner" style="margin-top:12px">
       <b>리멤버에서 가져오기</b>는 이미 로그인된 Chrome에 붙어서 수집합니다.
       Chrome을 완전히 종료한 뒤 <code>chrome.exe --remote-debugging-port=9222</code> 로 한 번 실행해 두세요.
-      (자동화 브라우저의 구글 로그인은 차단되므로 이 방식이 유일하게 안정적입니다.)
+      자동화 브라우저의 구글 로그인은 차단되므로(<code>signin/rejected</code>) 이 방식이 유일하게 안정적입니다.
     </div>
-    ${S.sourceProfile ? `<div class="msg"><div class="to"><b>자사 프로파일</b> · ${S.sourceProfile.site}</div>
-      <div class="facts">서비스 ${(S.sourceProfile.services ?? []).length}종 ·
-      공신력 근거 ${(S.sourceProfile.credentials ?? []).join(' / ')} ·
-      레퍼런스 ${(S.sourceProfile.reference_projects ?? []).length}건</div></div>` : ''}
-    <p class="muted" style="font-size:12.5px;margin-top:12px">
-      <code>data/cards.json</code>(리멤버 반출본)이 있으면 그것을, 없으면 샘플 시드를 사용합니다.
-      리멤버 반출은 <code>npm run login</code> → <code>npm run probe</code> 로 연결합니다.</p>
     ${S.cards.length ? cardRows(S.cards) : ''}`,
 
   resolve: () => `
-    <div class="row"><button data-act="resolve">회사·홈페이지 식별</button></div>
+    <div class="msg">
+      <div class="to"><b>발신 (source)</b> — 고정</div>
+      <div style="font-size:15px;font-weight:600;margin-bottom:2px">${esc(S.company?.name)}</div>
+      <div class="muted" style="font-size:12.5px">${esc(S.company?.tagline)} · 업력 ${S.company?.years}년 ·
+        누적 진단 ${S.company?.projects}건<br>${esc(S.company?.addr)} · ${esc(S.company?.tel)}</div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost" data-act="source">자사 홈페이지 다시 읽기</button>
+      </div>
+      ${S.sourceProfile ? `<div class="facts" style="margin-top:8px">
+        서비스 ${(S.sourceProfile.services ?? []).length}종 ·
+        공신력 ${esc((S.sourceProfile.credentials ?? []).join(' / '))} ·
+        레퍼런스 ${(S.sourceProfile.reference_projects ?? []).length}건</div>` : ''}
+    </div>
+
+    <div class="msg">
+      <div class="to"><b>발신자 명의</b> — 누구 이름으로 나가는가에 따라 톤이 달라집니다</div>
+      <div class="row">
+        ${(S.personas ?? []).map(p => `
+          <button class="${(S.personaId ?? 'sales') === p.id ? '' : 'ghost'}" data-persona="${p.id}">${esc(p.label)}</button>
+        `).join('')}
+      </div>
+      <div class="facts" style="margin-top:8px">
+        ${esc((S.personas ?? []).find(p => p.id === (S.personaId ?? 'sales'))?.tone)}</div>
+    </div>
+
+    <div class="msg">
+      <div class="to"><b>발송 모드</b> — 수신자(target) 대응 방식</div>
+      <div class="row">
+        <button class="${S.mode === '1:N' ? 'ghost' : ''}" data-mode="1:1">1 : 1 개별 맞춤</button>
+        <button class="${S.mode === '1:N' ? '' : 'ghost'}" data-mode="1:N">1 : N 고객군 공통</button>
+      </div>
+      <div class="facts" style="margin-top:8px">
+        ${S.mode === '1:N'
+          ? '고객군마다 공통 문안 1건을 만들고 이름·회사만 치환합니다. 빠르고 저렴하지만 개인화 깊이가 얕습니다. 명함 수가 많을 때.'
+          : '수신자 회사 홈페이지에서 뽑은 사실을 각각 인용해 1건씩 만듭니다. 응답률이 높지만 건당 모델 호출이 듭니다. 고가치 대상에.'}
+      </div>
+    </div>
     <div style="margin-top:14px">${cardRows(S.cards)}</div>`,
 
   enrich: () => `
-    <div class="banner">홈페이지를 실제로 읽어 근거 사실을 추출합니다.
-      근거가 0개인 대상은 이후 단계에서 메시지 생성이 자동 차단됩니다.</div>
-    <div class="row"><button data-act="enrich">전체 리서치 실행</button></div>
+    <div class="banner">source(자사)와 target(고객) 홈페이지를 모두 읽습니다.
+      근거가 0개인 대상은 STEP 5에서 생성이 자동 차단됩니다.</div>
+    <div class="row">
+      <button data-act="enrich">전체 리서치 실행</button>
+      <button class="ghost" data-act="prompt">이 설정으로 만들어지는 프롬프트 보기</button>
+    </div>
+    ${promptPreview ? `
+      <div class="msg" style="margin-top:14px">
+        <div class="to"><b>조립된 프롬프트</b> · ${esc(promptPreview.mode ?? '')}
+          ${esc(promptPreview.target ?? promptPreview.segment ?? '')}</div>
+        ${promptPreview.note ? `<span class="chk f">${esc(promptPreview.note)}</span>` : ''}
+        <pre style="white-space:pre-wrap;background:#12151b;border:1px solid var(--line);border-radius:8px;
+          padding:14px;font-size:12px;line-height:1.7;max-height:520px;overflow:auto">${esc(promptPreview.prompt)}</pre>
+        <div class="facts">이 프롬프트가 곧 제품 로직입니다. 고칠 곳은 <code>src/domain.mjs</code>(고객군 정의)와
+          <code>src/generate.mjs</code>(작성 규칙)입니다.</div>
+      </div>` : ''}
     <div style="margin-top:14px">${cardRows(S.cards)}</div>`,
 
   segment: () => `
-    <div class="banner">HUMAN IN THE LOOP ① — 자동 분류 결과를 보고
+    <div class="banner">HUMAN IN THE LOOP — 자동 분류 결과를 보고
       <b>실제로 발송할 고객군과 명함을 사람이 확정</b>합니다.</div>
     <div class="row">
-      <button data-act="segment">세그먼트 자동 분류</button>
+      <button data-act="segment">고객군 자동 분류</button>
       ${S.segments.map(s => `<button class="ghost" data-pick="${s.id}">${s.label}</button>`).join('')}
       <button class="ghost" data-pick="none">선택 해제</button>
     </div>
@@ -110,14 +159,18 @@ const VIEWS = {
         <option value="sms">문자(LMS)</option>
         <option value="remember">리멤버 메시지</option>
       </select>
-      <button data-act="generate" ${S.selection.length ? '' : 'disabled'}>선택 ${S.selection.length}건 카피 생성</button>
+      <button data-act="generate" ${S.selection.length ? '' : 'disabled'}>
+        ${S.mode === '1:N' ? `고객군 공통 문안 생성 (대상 ${S.selection.length}건)` : `선택 ${S.selection.length}건 개별 생성`}
+      </button>
     </div>
     <p class="muted" style="font-size:12.5px;margin-top:12px">
-      세그먼트별 트리거·통증·실적 레퍼런스에 홈페이지 근거를 결합해 1:1 문안을 생성합니다.</p>
+      ${S.mode === '1:N'
+        ? '고객군마다 문안 1건을 만들고 수신자별로 이름·회사를 치환합니다.'
+        : '수신자별로 홈페이지 근거를 인용한 문안을 각각 만듭니다.'}</p>
     ${S.cards.filter(c => c.message).map(msgCard).join('')}`,
 
   review: () => `
-    <div class="banner">HUMAN IN THE LOOP ② — <b>사람이 문안을 고치고 승인해야만</b>
+    <div class="banner">HUMAN IN THE LOOP — <b>사람이 문안을 고치고 승인해야만</b>
       발송 큐로 넘어갑니다. 자동 발송은 없습니다.</div>
     ${S.cards.filter(c => c.message).length
       ? S.cards.filter(c => c.message).map(msgCard).join('')
@@ -126,14 +179,25 @@ const VIEWS = {
   deliver: () => {
     const ok = S.cards.filter(c => c.message?.reviewStatus === 'APPROVED');
     return `
-      <div class="row"><button data-act="deliver" ${ok.length ? '' : 'disabled'}>승인된 ${ok.length}건 발송 큐 적재</button></div>
-      <div class="banner" style="margin-top:14px">프로토타입 단계에서는 실제 전송을 하지 않고 큐에만 적재합니다.
-        실제 발송 연동 시 수신동의 확인 · 야간(21~08시) 발송 차단 · 30일 내 중복 발송 차단이 함께 적용됩니다.</div>
-      <table><thead><tr><th>담당자</th><th>회사</th><th>상태</th><th>시각</th></tr></thead><tbody>
+      <div class="row">
+        <button data-act="deliver" ${ok.length ? '' : 'disabled'}>승인 ${ok.length}건 · 발송 큐 적재 (전송 안 함)</button>
+        <button class="bad" data-act="send" ${ok.length && S.smtp?.configured ? '' : 'disabled'}>실제 Gmail 발송</button>
+      </div>
+      <div class="banner" style="margin-top:14px">
+        ${S.smtp?.configured
+          ? `발신 계정 <b>${esc(S.smtp.user)}</b> 연결됨. 실제 발송은 승인된 건만, 21~08시에는 차단됩니다.`
+          : `실제 발송을 하려면 프로젝트 루트 <code>.env</code> 에 아래를 넣으세요. 앱 비밀번호는
+             Google 계정 &gt; 보안 &gt; 2단계 인증 &gt; 앱 비밀번호 에서 직접 발급하시면 됩니다.
+             <pre style="margin:8px 0 0;font-size:12px">GMAIL_USER=보내는주소@gmail.com
+GMAIL_APP_PASSWORD=앱비밀번호16자리
+GMAIL_FROM_NAME=에이톰엔지니어링</pre>`}
+      </div>
+      <table style="margin-top:14px"><thead><tr><th>담당자</th><th>회사</th><th>수신</th><th>상태</th><th>시각</th></tr></thead><tbody>
       ${S.cards.filter(c => c.message).map(c => `<tr>
         <td>${esc(c.name)}</td><td>${esc(c.company)}</td>
-        <td><span class="tag">${esc(c.status)}</span></td>
-        <td class="muted">${esc(c.deliveredAt) || '-'}</td></tr>`).join('')}
+        <td class="muted">${esc(c.email) || '-'}</td>
+        <td><span class="tag">${esc(c.status)}</span>${c.deliverError ? `<div class="chk f">${esc(c.deliverError)}</div>` : ''}</td>
+        <td class="muted">${esc(c.deliveredAt ?? c.queuedAt) || '-'}</td></tr>`).join('')}
       </tbody></table>`;
   },
 };
@@ -143,11 +207,13 @@ function msgCard(c) {
   if (m.error) {
     const why = m.error === 'insufficient-evidence' ? '홈페이지 근거 부족' : m.error;
     return `<div class="msg"><div class="to"><b>${esc(c.name)}</b> · ${esc(c.company)}</div>
-      <span class="chk f">생성 차단: ${esc(why)}</span></div>`;
+      <span class="chk f">생성 차단: ${esc(why)}</span>
+      ${m.prompt ? promptBlock(c.id, m.prompt) : ''}</div>`;
   }
   return `<div class="msg" data-id="${c.id}">
     <div class="to"><b>${esc(c.name)}</b> ${esc(c.title)} · ${esc(c.company)}
       <span class="tag seg" style="margin-left:6px">${esc(seg(c.segmentId)?.label)}</span>
+      <span class="tag" style="margin-left:4px">${esc(m.mode ?? '1:1')}</span>
       <span class="tag" style="margin-left:4px">${esc(m.reviewStatus)}</span></div>
     <div class="checks">${(m.checks ?? []).map(k =>
       `<span class="chk ${k.pass ? 'p' : 'f'}">${k.pass ? '✓' : '✕'} ${esc(k.label)}</span>`).join('')}</div>
@@ -159,29 +225,65 @@ function msgCard(c) {
       <button class="ok" data-rev="approve">승인</button>
       <button class="bad" data-rev="reject">반려</button>
       <button class="ghost" data-rev="save">수정만 저장</button>
-    </div></div>`;
+      ${m.prompt ? `<button class="ghost" data-prompt="${c.id}">
+        ${openPrompts.has(c.id) ? '프롬프트 접기' : '이 문안을 만든 프롬프트'}</button>` : ''}
+    </div>
+    ${m.prompt && openPrompts.has(c.id) ? promptBlock(c.id, m.prompt) : ''}
+  </div>`;
 }
+
+const promptBlock = (id, prompt) => `
+  <pre style="white-space:pre-wrap;background:#12151b;border:1px solid var(--line);border-radius:8px;
+    padding:14px;font-size:12px;line-height:1.7;max-height:460px;overflow:auto;margin-top:10px">${esc(prompt)}</pre>`;
 
 function bind() {
   const acts = {
     ingest: () => api('/api/ingest', {}),
     reset: () => api('/api/reset', {}),
-    resolve: () => api('/api/resolve', {}),
     enrich: () => api('/api/enrich', {}),
     segment: () => api('/api/segment', {}),
-    deliver: () => api('/api/deliver', {}),
-    generate: () => api('/api/generate', { channel: $('#ch').value }),
     source: () => api('/api/source-profile', {}),
+    generate: () => api('/api/generate', { channel: $('#ch').value }),
+    deliver: () => api('/api/deliver', { confirm: false }),
+    send: async () => {
+      const n = S.cards.filter(c => c.message?.reviewStatus === 'APPROVED').length;
+      if (!confirm(`승인된 ${n}건을 실제로 Gmail 발송합니다.\n\n되돌릴 수 없습니다. 진행할까요?`)) {
+        return api('/api/state');
+      }
+      const r = await api('/api/deliver', { confirm: true });
+      const sent = (r.results ?? []).filter(x => x.sent).length;
+      alert(`발송 ${sent}/${(r.results ?? []).length}건 성공`);
+      return r;
+    },
+    prompt: async () => {
+      const first = S.cards.find(c => S.selection.includes(c.id)) ?? S.cards[0];
+      promptPreview = await api('/api/prompt-preview', {
+        id: first?.id, segmentId: first?.segmentId, channel: 'email',
+      });
+      return api('/api/state');
+    },
     rexport: async () => {
       const r = await api('/api/remember-export', {});
-      alert(r.ok ? '리멤버 반출 완료. [명함 불러오기]를 눌러 적재하세요.' : `반출 실패
-
-${r.log}`);
+      alert(r.ok ? '리멤버 반출 완료. [명함 불러오기]를 눌러 적재하세요.' : `반출 실패\n\n${r.log}`);
       return api('/api/state');
     },
   };
   document.querySelectorAll('[data-act]').forEach(b => {
-    b.onclick = () => run(b.textContent, acts[b.dataset.act]);
+    b.onclick = () => run(b.textContent.trim(), acts[b.dataset.act]);
+  });
+
+  document.querySelectorAll('[data-mode]').forEach(b => {
+    b.onclick = async () => { S = await api('/api/mode', { mode: b.dataset.mode }); render(); };
+  });
+  document.querySelectorAll('[data-persona]').forEach(b => {
+    b.onclick = async () => { S = await api('/api/mode', { personaId: b.dataset.persona }); render(); };
+  });
+  document.querySelectorAll('[data-prompt]').forEach(b => {
+    b.onclick = () => {
+      const id = b.dataset.prompt;
+      openPrompts.has(id) ? openPrompts.delete(id) : openPrompts.add(id);
+      render();
+    };
   });
 
   document.querySelectorAll('.pick').forEach(cb => {

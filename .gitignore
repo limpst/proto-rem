@@ -29,3 +29,6 @@ Thumbs.db
 .auth/
 playwright-report/
 test-results/
+
+# 메일 발송 자격증명 (절대 커밋 금지)
+.env

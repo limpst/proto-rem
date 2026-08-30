@@ -6,7 +6,12 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const STATE = path.join(ROOT, 'data', 'state.json');
 
-const EMPTY = { tenantId: 'atom-eng', cards: [], selection: [], step: 1 };
+const EMPTY = {
+  tenantId: 'atom-eng',
+  cards: [], selection: [], step: 1,
+  mode: '1:1',        // 1:1 개별 맞춤 / 1:N 고객군 공통
+  personaId: 'sales', // 발신자 명의
+};
 
 export function load() {
   if (!fs.existsSync(STATE)) {
@@ -15,7 +20,8 @@ export function load() {
     save(s);
     return s;
   }
-  return JSON.parse(fs.readFileSync(STATE, 'utf8'));
+  // 기존 state.json 에 새 필드가 없을 수 있으므로 기본값을 채워 준다.
+  return { ...EMPTY, ...JSON.parse(fs.readFileSync(STATE, 'utf8')) };
 }
 
 export function save(state) {
