@@ -35,6 +35,14 @@ export const STEPS = [
   { n: 7, id: 'deliver',  label: '발송·추적',      hitl: false, desc: '승인 건만 발송, 이력·응답 기록' },
 ];
 
+/**
+ * 화면 한 장이 필요로 하는 전체 상태.
+ *
+ * 왜 헬퍼로 묶는가: 클라이언트는 응답을 S 에 통째로 대입한다. 어느 한 엔드포인트가
+ * steps/segments/personas 를 빠뜨리면 사이드바가 통째로 사라지고 render() 가
+ * S.steps[0] 에서 터진다(= 새로고침 전까지 앱 사용 불가). 응답을 한 곳에서
+ * 조립해 그 사고를 구조적으로 막는다.
+ */
 const json = (res, code, body) => {
   res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(body));
@@ -42,6 +50,14 @@ const json = (res, code, body) => {
 const readBody = req => new Promise(r => {
   let b = ''; req.on('data', c => b += c); req.on('end', () => r(b ? JSON.parse(b) : {}));
 });
+
+const fullState = async (st, extra = {}) => ({
+  ...st,
+  steps: STEPS, segments: SEGMENTS, company: COMPANY, personas: PERSONAS,
+  backend: await resolveBackend(), smtp: smtpStatus(),
+  ...extra,
+});
+const sendState = async (res, st, extra) => json(res, 200, await fullState(st, extra));
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -55,17 +71,10 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
   try {
-    if (p === '/api/state') {
-      return json(res, 200, {
-        ...load(), steps: STEPS, segments: SEGMENTS, company: COMPANY,
-        personas: PERSONAS,
-        backend: await resolveBackend(),
-        smtp: smtpStatus(),
-      });
-    }
+    if (p === '/api/state') return sendState(res, load());
 
     if (p === '/api/reset' && req.method === 'POST') {
-      return json(res, 200, reset());
+      return sendState(res, reset());
     }
 
     // --- 1-a. 리멤버 반출 (이미 로그인된 Chrome에 CDP로 접속) --------------
@@ -104,7 +113,7 @@ const server = http.createServer(async (req, res) => {
     // --- 1-b. 자사(에이톰) 홈페이지 프로파일 ------------------------------
     if (p === '/api/source-profile' && req.method === 'POST') {
       const profile = await buildSourceProfile({ force: true });
-      return json(res, 200, update(st => { st.sourceProfile = profile; }));
+      return sendState(res, update(st => { st.sourceProfile = profile; }));
     }
 
     // --- 1-c. 콘솔 스니펫으로 받은 cards.json 업로드 ----------------------
@@ -116,21 +125,17 @@ const server = http.createServer(async (req, res) => {
       // 업로드본을 반출본과 같은 자리에 두어 이후 [명함 불러오기]가 그대로 읽게 한다.
       fs.mkdirSync(path.join(ROOT, 'data'), { recursive: true });
       fs.writeFileSync(path.join(ROOT, 'data', 'cards.json'), JSON.stringify(cards, null, 2), 'utf8');
-      return json(res, 200, {
-        ...update(st => {
-          st.cards = cards.map(c => ({ ...c, status: 'NEW' }));
-          st.source = 'remember-export';
-          st.selection = [];
-          st.step = 1;
-        }),
-        steps: STEPS, segments: SEGMENTS, company: COMPANY,
-        personas: PERSONAS, backend: await resolveBackend(), smtp: smtpStatus(),
-      });
+      return sendState(res, update(st => {
+        st.cards = cards.map(c => ({ ...c, status: 'NEW' }));
+        st.source = 'remember-export';
+        st.selection = [];
+        st.step = 1;
+      }));
     }
 
     // --- 1. 수집 -------------------------------------------------------
     if (p === '/api/ingest' && req.method === 'POST') {
-      return json(res, 200, update(st => {
+      return sendState(res, update(st => {
         const seed = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'seed-cards.json'), 'utf8'));
         const exported = path.join(ROOT, 'data', 'cards.json');
         const hasExport = fs.existsSync(exported);
@@ -144,7 +149,7 @@ const server = http.createServer(async (req, res) => {
     // --- 2. 발신 설정 + 발송 모드 (HITL) ---------------------------------
     if (p === '/api/mode' && req.method === 'POST') {
       const { mode, personaId } = await readBody(req);
-      return json(res, 200, update(st => {
+      return sendState(res, update(st => {
         if (mode) st.mode = mode === '1:N' ? '1:N' : '1:1';
         if (personaId) st.personaId = personaId;
         for (const c of st.cards) {
@@ -168,13 +173,13 @@ const server = http.createServer(async (req, res) => {
         if (c.status === 'NEW') c.status = 'RESOLVED';
       }
       st.step = 2;
-      return json(res, 200, save(st));
+      return sendState(res, save(st));
     }
 
     // --- 2-c. 홈페이지 수동 입력 ------------------------------------------
     if (p === '/api/set-site' && req.method === 'POST') {
       const { id, site } = await readBody(req);
-      return json(res, 200, update(st => {
+      return sendState(res, update(st => {
         const c = st.cards.find(x => x.id === id);
         if (!c) return;
         const u = String(site ?? '').trim();
@@ -189,7 +194,10 @@ const server = http.createServer(async (req, res) => {
       const { ids } = await readBody(req);
       const st = load();
       if (!st.sourceProfile) st.sourceProfile = await buildSourceProfile();
-      const targets = st.cards.filter(c => !ids?.length || ids.includes(c.id));
+      // 제외·자사 명함과 홈페이지가 없는 명함은 읽을 것이 없다. 헛 요청을 줄인다.
+      const targets = st.cards.filter(c =>
+        (!ids?.length || ids.includes(c.id))
+        && !c.excluded && c.segmentId !== 'internal' && c.siteUrl);
       for (const c of targets) {
         const site = await fetchSite(c.siteUrl);
         c.siteFetch = { ok: site.ok, reason: site.reason, chars: site.text.length };
@@ -197,7 +205,7 @@ const server = http.createServer(async (req, res) => {
         c.status = 'ENRICHED';
       }
       st.step = 3;
-      return json(res, 200, save(st));
+      return sendState(res, save(st));
     }
 
     // --- 3-b. 프롬프트 미리보기 (생성하지 않고 프롬프트 원문만 조립) -------
@@ -250,7 +258,7 @@ const server = http.createServer(async (req, res) => {
         }
         st = save(st2);
       }
-      return json(res, 200, st);
+      return sendState(res, st);
     }
 
     // --- 1-d. 텍스트로 명함 직접 입력 -------------------------------------
@@ -263,23 +271,18 @@ const server = http.createServer(async (req, res) => {
       }
       fs.mkdirSync(path.join(ROOT, 'data'), { recursive: true });
       fs.writeFileSync(path.join(ROOT, 'data', 'cards.json'), JSON.stringify(cards, null, 2), 'utf8');
-      return json(res, 200, {
-        ...update(s2 => {
-          s2.cards = cards.map(c => ({ ...c, status: 'NEW', source: 'paste' }));
-          s2.source = 'paste';
-          s2.selection = [];
-          s2.step = 1;
-        }),
-        parsedAs: mode,
-        steps: STEPS, segments: SEGMENTS, company: COMPANY,
-        personas: PERSONAS, backend: await resolveBackend(), smtp: smtpStatus(),
-      });
+      return sendState(res, update(s2 => {
+        s2.cards = cards.map(c => ({ ...c, status: 'NEW', source: 'paste' }));
+        s2.source = 'paste';
+        s2.selection = [];
+        s2.step = 1;
+      }), { parsedAs: mode });
     }
 
     // --- 명함 개별 제외 (본인 프로필 등) ---------------------------------
     if (p === '/api/exclude' && req.method === 'POST') {
       const { id, excluded = true } = await readBody(req);
-      return json(res, 200, update(st => {
+      return sendState(res, update(st => {
         const c = st.cards.find(x => x.id === id);
         if (!c) return;
         c.excluded = Boolean(excluded);
@@ -290,7 +293,7 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/selection' && req.method === 'POST') {
       const { ids } = await readBody(req);
-      return json(res, 200, update(st => {
+      return sendState(res, update(st => {
         // 자사(에이톰) 명함은 어떤 경로로도 발송 대상이 되지 않게 서버에서 막는다.
         const internal = new Set(st.cards
           .filter(c => c.segmentId === 'internal' || c.segmentId === 'excluded' || c.excluded)
@@ -333,7 +336,7 @@ const server = http.createServer(async (req, res) => {
         st.step = 5;
         save(st);
         const remaining = [...new Set(targets.map(c => c.segmentId))].filter(sid => !st.templates[sid]).length;
-        return json(res, 200, { ...load(), steps: STEPS, segments: SEGMENTS, company: COMPANY, remaining, done });
+        return sendState(res, load(), { remaining, done });
       }
 
       for (const c of targets.filter(c => !c.message).slice(0, batch)) {
@@ -347,13 +350,13 @@ const server = http.createServer(async (req, res) => {
       st.step = 5;
       save(st);
       const remaining = load().cards.filter(c => st.selection.includes(c.id) && !c.message).length;
-      return json(res, 200, { ...load(), steps: STEPS, segments: SEGMENTS, company: COMPANY, remaining, done });
+      return sendState(res, load(), { remaining, done });
     }
 
     // --- 6. 검토·승인 (HITL) --------------------------------------------
     if (p === '/api/review' && req.method === 'POST') {
       const { id, action, subject, body } = await readBody(req);
-      return json(res, 200, update(st => {
+      return sendState(res, update(st => {
         const c = st.cards.find(x => x.id === id);
         if (!c?.message) return;
         if (subject !== undefined) c.message.subject = subject;
@@ -389,7 +392,7 @@ const server = http.createServer(async (req, res) => {
       }
       st.step = 7;
       save(st);
-      return json(res, 200, { ...load(), steps: STEPS, segments: SEGMENTS, company: COMPANY, results });
+      return sendState(res, load(), { results });
     }
 
     // --- 정적 파일 ------------------------------------------------------

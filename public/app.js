@@ -5,21 +5,48 @@ let promptPreview = null;
 const openPrompts = new Set();
 
 const api = async (p, body) => {
-  const r = await fetch(p, body
-    ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
-    : { method: 'GET' });
-  return r.json();
+  let r;
+  try {
+    r = await fetch(p, body
+      ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
+      : { method: 'GET' });
+  } catch (e) {
+    return { error: `서버에 연결하지 못했습니다.
+${e.message}` };
+  }
+  // 서버가 500 을 HTML 로 뱉는 경우가 있어 무조건 JSON 으로 믿지 않는다.
+  const txt = await r.text();
+  try { return JSON.parse(txt); }
+  catch { return { error: `서버 응답을 해석하지 못했습니다 (HTTP ${r.status})
+${txt.slice(0, 300)}` }; }
 };
+
+/* 응답을 화면 상태 S 에 반영한다.
+   응답에 steps 같은 메타가 빠져 있어도 이전 값을 살린다. 예전에는 부분 응답이
+   S 를 통째로 덮어써 사이드바가 사라지고 render() 가 S.steps[0] 에서 터졌다. */
+const META = ['steps', 'segments', 'company', 'personas', 'backend', 'smtp'];
+function adopt(r) {
+  if (!r) return S;
+  if (r.error) { alert(r.error); return S; }
+  for (const k of META) if (r[k] === undefined && S?.[k] !== undefined) r[k] = S[k];
+  S = r;
+  return S;
+}
+const post = async (p, body) => adopt(await api(p, body));
 
 const run = async (label, fn) => {
   if (busy || !fn) return;
-  busy = true; render(label);
+  busy = true;
   try {
-    const r = await fn();
-    if (r && !r.error) S = r;
-    else if (r?.error) alert(r.error);
-  } catch (e) { alert(e.message); }
-  busy = false; render();
+    render(label);
+    adopt(await fn());
+  } catch (e) {
+    alert(e?.message ?? String(e));
+  } finally {
+    // busy 해제를 finally 에 둔다. 렌더가 터져도 버튼이 영구히 잠기지 않는다.
+    busy = false;
+    render();
+  }
 };
 
 const seg = id => (S.segments ?? []).find(s => s.id === id);
@@ -136,18 +163,41 @@ const SHORT = {
   deliver: '승인 건만 전송',
 };
 
-/* ── 렌더 ────────────────────────────────────────────────── */
+/* ── 렌더 ──────────────────────────────────────────────────
+   draw() 가 어떤 이유로든 터져도 화면이 통째로 멎지 않도록 감싼다. */
 function render(loading) {
+  try {
+    draw(loading);
+  } catch (e) {
+    console.error(e);
+    $('#view').innerHTML = `<div class="panel"><div class="cap">화면을 그리지 못했습니다</div>
+      <pre>${esc(e?.stack ?? e)}</pre>
+      <div class="row"><button id="reload">새로고침</button></div></div>`;
+    const rb = $('#reload');
+    if (rb) { rb.dataset.tip = '페이지를 다시 불러와 서버 상태부터 새로 받습니다'; rb.onclick = () => location.reload(); }
+  }
+}
+
+function draw(loading) {
   if (!S) return;
   if (S.error && !S.steps) {
     $('#view').innerHTML = `<div class="panel"><div class="cap">서버 오류</div><pre>${esc(S.error)}</pre></div>`;
     return;
   }
+  const steps = S.steps ?? [];
+  if (!steps.length) {
+    $('#view').innerHTML = `<div class="panel"><div class="cap">단계 정보를 받지 못했습니다</div>
+      <div class="muted">서버 응답이 불완전합니다. 새로고침하면 복구됩니다.</div>
+      <div class="row" style="margin-top:10px"><button id="reload">새로고침</button></div></div>`;
+    const rb = $('#reload');
+    if (rb) { rb.dataset.tip = '페이지를 다시 불러와 서버 상태부터 새로 받습니다'; rb.onclick = () => location.reload(); }
+    return;
+  }
   const x = stats();
 
-  $('#rail').innerHTML = (S.steps ?? []).map(s => {
+  $('#rail').innerHTML = steps.map(s => {
     const done = stepDone(s.n, x);
-    const isNext = !done && S.steps.filter(y => y.n < s.n).every(y => stepDone(y.n, x));
+    const isNext = !done && steps.filter(y => y.n < s.n).every(y => stepDone(y.n, x));
     return `
     <div class="step ${viewStep === s.n ? 'active' : ''} ${done ? 'done' : ''} ${isNext ? 'ready' : ''}" data-n="${s.n}">
       <div class="num">${done ? '✓' : s.n}</div>
@@ -176,43 +226,87 @@ function render(loading) {
   ].map(([k, v]) =>
     `<div class="cell ${v ? 'good' : 'zero'}"><div class="v">${v}</div><div class="k">${k}</div></div>`).join('');
 
-  const step = (S.steps ?? []).find(s => s.n === viewStep) ?? S.steps[0];
+  const step = steps.find(s => s.n === viewStep) ?? steps[0];
   $('#head').innerHTML = `
     <div class="eyebrow">STEP ${step.n}${step.hitl ? ' · 사람이 결정하는 단계' : ''}</div>
     <h2>${esc(step.label)}</h2>
     <div class="desc">${esc(step.desc)}</div>`;
 
-  const t = todoFor(step.n, x);
+  const t = todoFor(step.n, x) ?? { t: '', m: step.label, s: '' };
   $('#todo').innerHTML = loading
     ? `<div class="todo"><div class="t">진행 중</div><div class="spin" style="margin-top:8px">${esc(loading)}</div></div>`
     : `<div class="todo ${t.blocked ? 'blocked' : ''} ${t.done ? 'done' : ''}">
         <div class="t">${esc(t.t)}</div><div class="m">${esc(t.m)}</div><div class="s">${esc(t.s)}</div>
         ${PRIMARY[step.id] ? PRIMARY[step.id](x) : ''}</div>`;
 
-  $('#view').innerHTML = VIEWS[step.id](x);
+  $('#view').innerHTML = VIEWS[step.id]
+    ? VIEWS[step.id](x)
+    : `<div class="panel muted">알 수 없는 단계입니다: ${esc(step.id)}</div>`;
   bind();
 }
 
+/* ── 버튼 툴팁 문구 ──────────────────────────────
+   버튼 이름만으로는 "누르면 무슨 일이 벌어지는지"를 알 수 없다.
+   특히 되돌릴 수 없는 동작(초기화·실제 발송)과 오래 걸리는 동작(리서치·생성)이
+   같은 줄에 섞여 있어, 누르기 전에 결과·소요·부작용을 밝힌다. */
+const T = {
+  ingest: '서버의 data/cards.json(리멤버 반출·스니펫·붙여넣기 결과)을 읽어 명함 목록을 새로 채웁니다. 파일이 없으면 샘플 시드를 씁니다. 기존 목록은 대체됩니다.',
+  copysnippet: '리멤버 페이지 콘솔(F12)에 붙여넣을 수집 스크립트를 클립보드에 복사합니다. 서버로 나가는 것은 없습니다.',
+  reset: '명함·초안·승인·발송 이력을 모두 지웁니다. 되돌릴 수 없습니다. 확인 창이 한 번 더 뜹니다.',
+  rlogin: '이 프로그램 전용 크롬 창을 엽니다. 그 창에서 직접 로그인하면 로그인 상태만 저장됩니다(비밀번호는 다루지 않습니다). 서버가 내 PC 에서 돌 때만 동작합니다.',
+  rexport: '저장된 로그인으로 리멤버 명함첩을 훑어 data/cards.json 으로 반출합니다. 건수에 따라 수 분 걸립니다.',
+  rexportcdp: '--remote-debugging-port=9222 로 켜 둔 크롬에 붙어 명함을 반출합니다. 크롬을 완전히 종료한 뒤 재실행해야 합니다.',
+  paste: '위 상자의 텍스트를 표/덩어리로 해석해 명함을 만듭니다. 기존 명함 목록은 대체됩니다.',
+  source: '에이톰엔지니어링 홈페이지를 다시 읽어 서비스·레퍼런스 목록을 갱신합니다. 메일에 인용할 자사 실적의 출처입니다.',
+  resolvesites: '명함의 URL → 이메일 도메인 → 회사명 AI 추정 순으로 찾습니다. 실제로 접속되는 주소만 채택합니다. 회사 수만큼 접속하므로 시간이 걸립니다.',
+  enrich: '확보된 홈페이지를 실제로 열어 메일에 인용할 사실(근거)을 뽑습니다. 회사당 수 초 걸리고, 근거가 없으면 다음 단계에서 메일 생성이 막힙니다.',
+  prompt: '메일을 만들지 않습니다. AI 에게 실제로 보낼 지시문 원문만 보여줍니다.',
+  segment: '회사명 키워드 규칙으로 7개 고객군에 배정합니다. AI 호출이 없어 즉시 끝나고, 애매한 건은 미분류로 남습니다.',
+  segmentai: '규칙이 미분류로 남긴 명함만 AI 에게 물어봅니다. 건당 호출이라 시간이 걸리고, 결과는 추정이라 사람 확인이 필요합니다.',
+  channel: '만들 문안의 형식입니다. 문자(LMS)·리멤버 메시지는 제목 없이 본문만 만듭니다.',
+  generate: '선택한 대상에게 보낼 문안을 만듭니다. 1건씩 순차로 진행하며 한 통에 1~2분 걸릴 수 있습니다. 기존 초안은 다시 만들어집니다.',
+  deliver: '실제로 보내지 않습니다. 승인된 건의 상태만 QUEUED 로 바꿔 발송 직전 점검에 씁니다.',
+  send: '승인된 건을 Gmail SMTP 로 실제 전송합니다. 되돌릴 수 없습니다. 확인 창이 한 번 더 뜹니다.',
+  approve: '고친 제목·본문을 저장하고 발송 대상으로 확정합니다. 승인한 건만 STEP 7 로 넘어갑니다.',
+  reject: '이 건을 발송에서 제외합니다. 초안은 남습니다.',
+  saveEdit: '승인 상태는 그대로 두고 고친 제목·본문만 저장합니다.',
+  promptOne: '이 메일을 만들 때 AI 에게 보낸 지시문 원문을 펼쳐 봅니다.',
+  pickNone: '선택을 모두 해제합니다. 명함이 지워지지는 않습니다.',
+  siteIn: '홈페이지 주소를 직접 넣습니다. 입력 칸을 벗어나면 바로 저장됩니다.',
+  pickOne: '이 명함을 발송 대상에 넣거나 뺍니다. 자사·제외 명함은 서버에서도 걸러집니다.',
+  drop: '리멤버에서 받은 cards.json 파일을 올립니다. 기존 명함 목록은 대체됩니다.',
+};
+
 /* 각 단계의 주 버튼 — "지금 할 일" 상자 안에 둔다 */
 const PRIMARY = {
-  ingest: () => `<div class="row"><button data-act="ingest">명함 불러오기</button>
-    <button class="ghost" data-act="copysnippet">스니펫 복사</button></div>`,
-  resolve: () => `<div class="row"><button data-act="resolvesites">홈페이지 자동 찾기</button></div>`,
-  enrich: x => `<div class="row"><button data-act="enrich" ${x.site ? '' : 'disabled'}>전체 리서치 실행</button>
-    <button class="ghost" data-act="prompt">AI 에게 보낼 지시문 미리보기</button></div>`,
+  ingest: () => `<div class="row">
+      <button data-act="ingest" title="${T.ingest}">명함 불러오기</button>
+      <button class="ghost" data-act="copysnippet" title="${T.copysnippet}">스니펫 복사</button></div>`,
+  resolve: () => `<div class="row">
+      <button data-act="resolvesites" title="${T.resolvesites}">홈페이지 자동 찾기</button></div>`,
+  enrich: x => `<div class="row">
+      <button data-act="enrich" ${x.site ? '' : 'disabled'}
+        title="${x.site ? T.enrich : '홈페이지 주소가 하나도 없어 실행할 수 없습니다. STEP 2 에서 먼저 확보하세요.'}">전체 리서치 실행</button>
+      <button class="ghost" data-act="prompt" title="${T.prompt}">AI 에게 보낼 지시문 미리보기</button></div>`,
   segment: x => `<div class="row">
-      <button data-act="segment">고객군 분류 (규칙)</button>
-      <button data-act="segmentai">AI 로 마저 분류</button>
+      <button data-act="segment" title="${T.segment}">고객군 분류 (규칙)</button>
+      <button data-act="segmentai" title="${T.segmentai}">AI 로 마저 분류</button>
       ${x.classified ? '<span class="muted" style="font-size:12px">아래 표에서 체크박스로 대상을 고르세요</span>' : ''}</div>`,
   generate: x => `<div class="row">
-      <select id="ch" style="background:var(--sunk);color:var(--tx);border:1px solid var(--line);border-radius:7px;padding:8px 10px">
+      <select id="ch" title="${T.channel}"
+        style="background:var(--sunk);color:var(--tx);border:1px solid var(--line);border-radius:7px;padding:8px 10px">
         <option value="email">이메일</option><option value="sms">문자(LMS)</option><option value="remember">리멤버 메시지</option>
       </select>
-      <button data-act="generate" ${x.selected ? '' : 'disabled'}>메일 만들기 (${x.selected}건)</button></div>`,
+      <button data-act="generate" ${x.selected ? '' : 'disabled'}
+        title="${x.selected ? T.generate : '발송 대상이 없습니다. STEP 4 에서 먼저 고르세요.'}">메일 만들기 (${x.selected}건)</button></div>`,
   review: () => '',
   deliver: x => `<div class="row">
-      <button class="ghost" data-act="deliver" ${x.approved ? '' : 'disabled'}>발송 큐에 넣기 (전송 안 함)</button>
-      <button class="bad" data-act="send" ${x.approved && S.smtp?.configured ? '' : 'disabled'}>실제 발송</button></div>`,
+      <button class="ghost" data-act="deliver" ${x.approved ? '' : 'disabled'}
+        title="${x.approved ? T.deliver : '승인된 메일이 없습니다. STEP 6 에서 먼저 승인하세요.'}">발송 큐에 넣기 (전송 안 함)</button>
+      <button class="bad" data-act="send" ${x.approved && S.smtp?.configured ? '' : 'disabled'}
+        title="${!x.approved ? '승인된 메일이 없습니다. STEP 6 에서 먼저 승인하세요.'
+          : !S.smtp?.configured ? '발송 계정(.env 의 GMAIL_USER · GMAIL_APP_PASSWORD)이 설정되지 않았습니다.'
+          : T.send}">실제 발송</button></div>`,
 };
 
 /* ── 명함 표 ─────────────────────────────────────────────── */
@@ -229,12 +323,12 @@ const cardRows = (cards, { pick = true } = {}) => !cards.length
     ${cards.map(c => {
       const off = c.excluded || c.segmentId === 'internal';
       return `<tr class="${off ? 'off' : ''}">
-      ${pick ? `<td>${off ? '' : `<input type="checkbox" class="pick" value="${c.id}" ${(S.selection ?? []).includes(c.id) ? 'checked' : ''}>`}</td>` : ''}
+      ${pick ? `<td>${off ? '' : `<input type="checkbox" class="pick" value="${c.id}" title="${T.pickOne}" ${(S.selection ?? []).includes(c.id) ? 'checked' : ''}>`}</td>` : ''}
       <td><b>${esc(c.name)}</b>${srcTag('raw')}
         <div class="muted" style="font-size:11.5px">${esc(c.title)}</div>
         <div class="muted" style="font-size:11px">${esc(c.email)}</div></td>
       <td>${esc(c.company)}
-        <div style="margin-top:4px"><input class="site-in" data-site="${c.id}"
+        <div style="margin-top:4px"><input class="site-in" data-site="${c.id}" title="${T.siteIn}"
           value="${esc(c.siteUrl || c.site)}" placeholder="홈페이지 주소 (직접 입력 가능)"></div>
         ${c.siteResolve ? `<div class="muted" style="font-size:10.5px;margin-top:3px">
           ${srcTag({ card: 'raw', 'email-domain': 'calc', 'llm-guess': 'ai', manual: 'man' }[c.siteResolve.via] ?? '')}
@@ -249,7 +343,7 @@ const cardRows = (cards, { pick = true } = {}) => !cards.length
         ${c.segmentSource === 'ai' && c.segmentAi?.reason
           ? `<div class="muted" style="font-size:10.5px;margin-top:3px">${esc(c.segmentAi.reason)}</div>` : ''}
         <div style="margin-top:5px"><button class="ghost xs" data-ex="${c.id}" data-exv="${c.excluded ? '0' : '1'}"
-          title="명함이 아닌 항목(본인 프로필 등)을 제외합니다">${c.excluded ? '되돌리기' : '제외'}</button></div></td>
+          title="${c.excluded ? '이 명함을 다시 발송 대상 후보로 되돌립니다.' : '명함이 아닌 항목(본인 프로필 등)을 발송 대상에서 뺍니다. 데이터는 남습니다.'}">${c.excluded ? '되돌리기' : '제외'}</button></div></td>
       <td>${c.signals?.facts?.length
         ? `${srcTag('ai', '홈페이지에서 AI가 추출')}<ul class="facts">${c.signals.facts.map(f => `<li>${esc(f)}</li>`).join('')}</ul>`
         : `<span class="muted" style="font-size:11.5px">${c.siteFetch ? `읽기 실패 (${esc(c.siteFetch.reason)})` : '아직 안 읽음'}</span>`}</td>
@@ -350,7 +444,7 @@ const VIEWS = {
           <li>오른쪽 아래 상자가 뜨면 <b>명함 목록을 끝까지 스크롤</b></li>
           <li><b>[대시보드로 바로 보내기]</b> → 이 화면에서 <b>[명함 불러오기]</b></li>
         </ol>
-        <div class="drop" id="drop">파일로 받으셨다면 cards.json 을 여기에 끌어다 놓으세요
+        <div class="drop" id="drop" title="${T.drop}">파일로 받으셨다면 cards.json 을 여기에 끌어다 놓으세요
           <input type="file" id="file" accept=".json" hidden></div>
 
         <div class="cap" style="margin-top:18px">방법 ① 전용 브라우저 로그인 <span class="tag">반복 수집에 유리</span></div>
@@ -359,14 +453,14 @@ const VIEWS = {
           평소 크롬은 건드리지 않습니다.<br>
           <span style="color:var(--warn)">구글 로그인은 자동화 창에서 차단됩니다. 네이버·카카오를 쓰세요.</span></div>
         <div class="row">
-          <button class="ghost sm" data-act="rlogin">브라우저 열어 로그인</button>
-          <button class="ghost sm" data-act="rexport">전부 가져오기</button>
+          <button class="ghost sm" data-act="rlogin" title="${T.rlogin}">브라우저 열어 로그인</button>
+          <button class="ghost sm" data-act="rexport" title="${T.rexport}">전부 가져오기</button>
         </div>
 
         <div class="cap" style="margin-top:18px">방법 ③ CDP 접속 <span class="tag">크롬 재시작 필요</span></div>
         <pre style="margin-top:0">Get-Process chrome | Stop-Process -Force
 &amp; "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9222</pre>
-        <div class="row" style="margin-top:9px"><button class="ghost sm" data-act="rexportcdp">CDP 로 가져오기</button></div>
+        <div class="row" style="margin-top:9px"><button class="ghost sm" data-act="rexportcdp" title="${T.rexportcdp}">CDP 로 가져오기</button></div>
       </div>
     </details>
 
@@ -389,13 +483,13 @@ atom@atom-eng.co.kr
           style="width:100%;min-height:150px;background:var(--sunk);border:1px solid var(--line);
           color:var(--tx);border-radius:8px;padding:11px;font-size:12.5px;line-height:1.7;
           font-family:ui-monospace,Consolas,monospace"></textarea>
-        <div class="row" style="margin-top:9px"><button data-act="paste">붙여넣은 내용으로 명함 만들기</button></div>
+        <div class="row" style="margin-top:9px"><button data-act="paste" title="${T.paste}">붙여넣은 내용으로 명함 만들기</button></div>
       </div>
     </details>
 
     <div class="panel">
       <div class="cap">가져온 명함 · 출처 ${S.source === 'remember-export' ? '리멤버' : S.source === 'paste' ? '직접 입력' : '샘플 시드'}
-        <button class="ghost xs" data-act="reset" style="margin-left:8px">전체 초기화</button></div>
+        <button class="ghost xs" data-act="reset" style="margin-left:8px" title="${T.reset}">전체 초기화</button></div>
       ${cardRows(S.cards ?? [], { pick: false })}
     </div>`,
 
@@ -407,7 +501,7 @@ atom@atom-eng.co.kr
         ${esc(S.company?.tagline)} · 업력 ${S.company?.years}년 · 누적 진단 ${S.company?.projects}건<br>
         ${esc(S.company?.addr)} · ${esc(S.company?.tel)}</div>
       <div class="row" style="margin-top:11px">
-        <button class="ghost sm" data-act="source">자사 홈페이지 다시 읽기</button>
+        <button class="ghost sm" data-act="source" title="${T.source}">자사 홈페이지 다시 읽기</button>
         ${S.sourceProfile ? `<span class="tag ok">서비스 ${(S.sourceProfile.services ?? []).length}종 · 레퍼런스 ${(S.sourceProfile.reference_projects ?? []).length}건</span>` : ''}
       </div>
     </div>
@@ -416,7 +510,8 @@ atom@atom-eng.co.kr
       <div class="cap">누구 이름으로 보낼까요 — 고르는 사람에 따라 말투가 달라집니다</div>
       <div class="grid2">
         ${(S.personas ?? []).map(p => `
-          <button class="opt ${S.personaId === p.id ? 'on' : ''}" data-persona="${p.id}">
+          <button class="opt ${S.personaId === p.id ? 'on' : ''}" data-persona="${p.id}"
+            title="이 명의로 메일을 씁니다 — ${esc(p.tone)}">
             <b>${esc(p.label)}</b><span>${esc(p.tone)}</span></button>`).join('')}
       </div>
     </div>
@@ -424,10 +519,12 @@ atom@atom-eng.co.kr
     <div class="panel">
       <div class="cap">한 명씩 따로 쓸까요, 그룹에 같은 글을 보낼까요</div>
       <div class="grid2">
-        <button class="opt ${S.mode === '1:1' ? 'on' : ''}" data-mode="1:1">
+        <button class="opt ${S.mode === '1:1' ? 'on' : ''}" data-mode="1:1"
+          title="수신자 한 명당 한 통을 따로 만듭니다. 그 회사 홈페이지에서 뽑은 근거를 인용하므로 답장률이 높지만 한 통에 1~2분 걸립니다.">
           <b>1 : 1 개별 맞춤</b>
           <span>그 회사 홈페이지 내용을 인용해 한 통씩 씁니다. 답장률이 높지만 한 통에 1~2분 걸립니다.</span></button>
-        <button class="opt ${S.mode === '1:N' ? 'on' : ''}" data-mode="1:N">
+        <button class="opt ${S.mode === '1:N' ? 'on' : ''}" data-mode="1:N"
+          title="고객군마다 공통 문안 한 통을 만들고 이름·회사만 바꿔 넣습니다. 빠르지만 내용이 일반적입니다.">
           <b>1 : N 고객군 공통</b>
           <span>고객군마다 한 통을 쓰고 이름·회사만 바꿔 넣습니다. 빠르지만 내용이 일반적입니다.</span></button>
       </div>
@@ -460,9 +557,10 @@ atom@atom-eng.co.kr
       <div class="row">
         ${(S.segments ?? []).map(s => {
           const n = (S.cards ?? []).filter(c => c.segmentId === s.id).length;
-          return `<button class="ghost sm" data-pick="${s.id}" ${n ? '' : 'disabled'}>${esc(s.label)}${n ? ` (${n})` : ''}</button>`;
+          return `<button class="ghost sm" data-pick="${s.id}" ${n ? '' : 'disabled'}
+            title="${n ? `이 고객군 ${n}건만 발송 대상으로 한 번에 선택합니다. 기존 선택은 대체됩니다.` : '이 고객군에 해당하는 명함이 없습니다.'}">${esc(s.label)}${n ? ` (${n})` : ''}</button>`;
         }).join('')}
-        <button class="ghost sm" data-pick="none">선택 해제</button>
+        <button class="ghost sm" data-pick="none" title="${T.pickNone}">선택 해제</button>
       </div>
     </div>
     <div class="panel">${cardRows(S.cards ?? [])}</div>`,
@@ -525,15 +623,71 @@ function msgCard(c) {
       이 메일이 요구하는 행동: ${esc(m.cta) || '-'}<br>
       인용한 실적: ${esc((m.refs_used ?? []).join(', ')) || '없음'}</div>
     <div class="row">
-      <button class="ok sm" data-rev="approve">승인</button>
-      <button class="bad sm" data-rev="reject">반려</button>
-      <button class="ghost sm" data-rev="save">고친 내용만 저장</button>
-      ${m.prompt ? `<button class="ghost sm" data-prompt="${c.id}">
+      <button class="ok sm" data-rev="approve" title="${T.approve}">승인</button>
+      <button class="bad sm" data-rev="reject" title="${T.reject}">반려</button>
+      <button class="ghost sm" data-rev="save" title="${T.saveEdit}">고친 내용만 저장</button>
+      ${m.prompt ? `<button class="ghost sm" data-prompt="${c.id}" title="${T.promptOne}">
         ${openPrompts.has(c.id) ? '지시문 접기' : '이 메일을 만든 지시문 보기'}</button>` : ''}
     </div>
     ${m.prompt && openPrompts.has(c.id) ? `<pre style="max-height:420px">${esc(m.prompt)}</pre>` : ''}
   </div>`;
 }
+
+/* ── 툴팁 ──────────────────────────────────────────────────
+   title 을 그대로 두면 OS 기본 툴팁이 1초쯤 뒤에 작은 글씨로 뜬다. 문장이 길어
+   실제로는 읽히지 않는다. 그래서 렌더 뒤 title 을 data-tip 으로 옮겨 직접 그린다.
+   aria-label 로 남겨 두어 스크린리더·키보드 사용자도 같은 설명을 받는다. */
+const tipBox = document.createElement('div');
+tipBox.className = 'tip';
+tipBox.hidden = true;
+document.body.appendChild(tipBox);
+let tipTimer = null, tipFor = null;
+
+function moveTitles(root = document) {
+  root.querySelectorAll('[title]').forEach(el => {
+    const t = el.getAttribute('title');
+    el.dataset.tip = t;
+    if (!el.getAttribute('aria-label')) el.setAttribute('aria-label', t);
+    el.removeAttribute('title');
+  });
+}
+
+function showTip(el) {
+  const msg = el.dataset.tip;
+  if (!msg) return;
+  tipFor = el;
+  tipBox.textContent = msg;
+  tipBox.hidden = false;
+  const r = el.getBoundingClientRect();
+  const w = tipBox.offsetWidth, h = tipBox.offsetHeight;
+  const left = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), innerWidth - w - 8);
+  let top = r.top - h - 8;
+  if (top < 8) top = Math.min(r.bottom + 8, innerHeight - h - 8);
+  tipBox.style.left = `${left}px`;
+  tipBox.style.top = `${Math.max(8, top)}px`;
+}
+
+function hideTip() { clearTimeout(tipTimer); tipBox.hidden = true; tipFor = null; }
+
+document.addEventListener('mouseover', e => {
+  const el = e.target.closest?.('[data-tip]');
+  if (!el || el === tipFor) return;
+  clearTimeout(tipTimer);
+  tipTimer = setTimeout(() => showTip(el), 180);
+});
+document.addEventListener('mouseout', e => {
+  const el = e.target.closest?.('[data-tip]');
+  if (!el) return;
+  if (e.relatedTarget && el.contains(e.relatedTarget)) return;  // 자식으로 이동한 것뿐
+  hideTip();
+});
+document.addEventListener('focusin', e => {
+  const el = e.target.closest?.('[data-tip]');
+  if (el) showTip(el);
+});
+document.addEventListener('focusout', hideTip);
+document.addEventListener('click', hideTip, true);
+window.addEventListener('scroll', hideTip, true);
 
 /* ── 이벤트 ──────────────────────────────────────────────── */
 function bind() {
@@ -552,9 +706,10 @@ function bind() {
       const channel = $('#ch').value;
       let r = await api('/api/generate', { channel, batch: 1, restart: true });
       let guard = 0;
-      while (r.remaining > 0 && guard++ < 300) {
-        S = r; render(`메일 만드는 중 — ${r.remaining}건 남음`);
+      while (r?.remaining > 0 && guard++ < 300) {
+        adopt(r); render(`메일 만드는 중 — ${r.remaining}건 남음`);
         r = await api('/api/generate', { channel, batch: 1 });
+        if (r?.error) break;
       }
       return r;
     },
@@ -612,10 +767,10 @@ function bind() {
     b.onclick = () => run(b.textContent.trim(), acts[b.dataset.act]);
   });
   document.querySelectorAll('[data-mode]').forEach(b => {
-    b.onclick = async () => { S = await api('/api/mode', { mode: b.dataset.mode }); render(); };
+    b.onclick = async () => { await post('/api/mode', { mode: b.dataset.mode }); render(); };
   });
   document.querySelectorAll('[data-persona]').forEach(b => {
-    b.onclick = async () => { S = await api('/api/mode', { personaId: b.dataset.persona }); render(); };
+    b.onclick = async () => { await post('/api/mode', { personaId: b.dataset.persona }); render(); };
   });
   document.querySelectorAll('[data-prompt]').forEach(b => {
     b.onclick = () => {
@@ -626,20 +781,20 @@ function bind() {
   });
   document.querySelectorAll('[data-site]').forEach(inp => {
     inp.onchange = async () => {
-      S = await api('/api/set-site', { id: inp.dataset.site, site: inp.value });
+      await post('/api/set-site', { id: inp.dataset.site, site: inp.value });
       render();
     };
   });
   document.querySelectorAll('[data-ex]').forEach(b => {
     b.onclick = async () => {
-      S = await api('/api/exclude', { id: b.dataset.ex, excluded: b.dataset.exv === '1' });
+      await post('/api/exclude', { id: b.dataset.ex, excluded: b.dataset.exv === '1' });
       render();
     };
   });
   document.querySelectorAll('.pick').forEach(cb => {
     cb.onchange = async () => {
       const ids = [...document.querySelectorAll('.pick:checked')].map(y => y.value);
-      S = await api('/api/selection', { ids });
+      await post('/api/selection', { ids });
       render();
     };
   });
@@ -647,14 +802,14 @@ function bind() {
     b.onclick = async () => {
       const t = b.dataset.pick;
       const ids = t === 'none' ? [] : (S.cards ?? []).filter(c => c.segmentId === t).map(c => c.id);
-      S = await api('/api/selection', { ids });
+      await post('/api/selection', { ids });
       render();
     };
   });
   document.querySelectorAll('[data-rev]').forEach(b => {
     b.onclick = async () => {
       const box = b.closest('.msg');
-      S = await api('/api/review', {
+      await post('/api/review', {
         id: box.dataset.id, action: b.dataset.rev,
         subject: box.querySelector('.f-subject')?.value,
         body: box.querySelector('.f-body')?.value,
@@ -671,6 +826,9 @@ function bind() {
     drop.ondrop = e => { e.preventDefault(); drop.style.borderColor = ''; upload(e.dataTransfer.files[0]); };
     file.onchange = () => upload(file.files[0]);
   }
+
+  // 이번 렌더로 새로 생긴 title 들을 툴팁으로 넘긴다.
+  moveTitles();
 }
 
 async function upload(f) {
@@ -681,9 +839,9 @@ async function upload(f) {
   if (!Array.isArray(cards)) return alert('명함 목록이 아닙니다.');
   const r = await api('/api/upload-cards', { cards });
   if (r.error) return alert(r.error);
-  S = r;
+  adopt(r);
   alert(`${(r.cards ?? []).length}건 불러왔습니다.`);
   render();
 }
 
-(async () => { S = await api('/api/state'); render(); })();
+(async () => { await post('/api/state'); render(); })();

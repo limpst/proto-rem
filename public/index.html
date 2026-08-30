@@ -162,6 +162,16 @@
   .drop{border:1px dashed var(--line2);border-radius:var(--r);padding:20px;text-align:center;
     color:var(--tx2);font-size:12.5px;cursor:pointer}
   .drop:hover{border-color:var(--accent);color:var(--tx)}
+
+  /* 툴팁 — 버튼이 무슨 일을 하는지 누르기 전에 읽는다 */
+  .tip{position:fixed;z-index:200;max-width:340px;background:#080a0e;color:var(--tx);
+    border:1px solid var(--line2);border-radius:8px;padding:9px 12px;
+    font-size:12px;line-height:1.65;box-shadow:0 10px 28px #000a;pointer-events:none;
+    white-space:pre-wrap}
+  .tip[hidden]{display:none}
+  [data-tip]{cursor:help}
+  button[data-tip],input[data-tip],select[data-tip],.opt[data-tip],.drop[data-tip]{cursor:pointer}
+  button[data-tip]:disabled{cursor:not-allowed}
 </style>
 </head>
 <body>
