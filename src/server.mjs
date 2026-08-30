@@ -170,7 +170,7 @@ const server = http.createServer(async (req, res) => {
 ');
       res.writeHead(200, {
         'content-type': 'text/csv; charset=utf-8',
-        'content-disposition': `attachment; filename="proto-rem-${new Date().toISOString().slice(0, 10)}.csv"`,
+        'content-disposition': `attachment; filename="safelead-${new Date().toISOString().slice(0, 10)}.csv"`,
       });
       return res.end(csv);
     }
@@ -473,4 +473,4 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => console.log(`\nproto-rem 대시보드 → http://localhost:${PORT}\n`));
+server.listen(PORT, () => console.log(`\nSafeLead 대시보드 → http://localhost:${PORT}\n`));

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -29,6 +30,25 @@ DEFAULT_OLLAMA_MODEL = env("OLLAMA_MODEL", "exaone3.5:7.8b")
 
 _cached_backend: dict | None = None
 _cached_override: dict | None | str = "unread"
+_cli_available: bool | None = None
+
+
+def claude_cli_exists() -> bool:
+    """claude CLI 가 실제로 설치돼 있는지 확인한다.
+
+    배포 서버(Render)에는 없다. 확인 없이 고르면 호출 시점에 가서야
+    FileNotFoundError 로 터진다 — 사용자에게는 "리서치가 그냥 안 됨"으로 보인다.
+    """
+    global _cli_available
+    if _cli_available is not None:
+        return _cli_available
+    try:
+        p = subprocess.run(["claude", "--version"], capture_output=True,
+                           timeout=8, shell=(sys.platform == "win32"))
+        _cli_available = p.returncode == 0
+    except Exception:
+        _cli_available = False
+    return _cli_available
 
 _CLOUD_RE = re.compile(r"[-:]cloud$")
 
@@ -94,12 +114,34 @@ def resolve_backend(refresh: bool = False) -> dict:
         model = picked or DEFAULT_OLLAMA_MODEL
         _cached_backend = {"name": "ollama", "model": model, "url": OLLAMA_URL,
                            "source": source, "alive": ollama_alive(), "cloud": is_cloud_model(model)}
+    elif forced == "claude-cli" and not claude_cli_exists():
+        # 강제 지정이라도 실행할 수 없으면 소용없다.
+        # Render 환경변수에 LLM_BACKEND=claude-cli 가 남아 있어 리서치가 통째로 죽었다.
+        if env("ANTHROPIC_API_KEY"):
+            _cached_backend = {
+                "name": "claude-api", "model": CLAUDE_MODEL, "source": source, "cloud": True,
+                "note": "LLM_BACKEND=claude-cli 로 지정됐지만 이 서버에 Claude CLI 가 없어 API 로 대체했습니다.",
+            }
+        else:
+            _cached_backend = {
+                "name": "none", "model": None, "source": source, "cloud": False,
+                "hint": "LLM_BACKEND=claude-cli 로 지정돼 있는데 이 서버에는 Claude CLI 가 없습니다. "
+                        "Render 대시보드 > Environment 에서 LLM_BACKEND 를 claude-api 로 바꾸고 "
+                        "ANTHROPIC_API_KEY 를 넣으세요.",
+            }
     elif forced:
         _cached_backend = {"name": forced, "model": CLAUDE_MODEL, "source": source, "cloud": True}
     elif env("ANTHROPIC_API_KEY"):
         _cached_backend = {"name": "claude-api", "model": CLAUDE_MODEL, "source": source, "cloud": True}
-    else:
+    elif claude_cli_exists():
         _cached_backend = {"name": "claude-cli", "model": CLAUDE_MODEL, "source": source, "cloud": True}
+    else:
+        # 셋 다 없다. 여기서 정직하게 멈춘다. 예전에는 claude-cli 로 넘어가 배포 서버에서 터졌다.
+        _cached_backend = {
+            "name": "none", "model": None, "source": source, "cloud": False,
+            "hint": "쓸 수 있는 AI 백엔드가 없습니다. 배포 환경이라면 ANTHROPIC_API_KEY 를 설정하고 "
+                    "LLM_BACKEND=claude-api 로 두세요. 내 컴퓨터라면 Ollama 를 실행하세요.",
+        }
     return _cached_backend
 
 
@@ -131,8 +173,10 @@ def complete(prompt: str, max_tokens: int | None = None, temperature: float | No
             out = _via_ollama(prompt, b["model"], max_tokens, temperature)
         elif b["name"] == "claude-api":
             out = _via_api(prompt, max_tokens or 1500)
-        else:
+        elif b["name"] == "claude-cli":
             out = _via_cli(prompt)
+        else:
+            raise RuntimeError(b.get("hint") or "AI 백엔드가 설정되지 않았습니다.")
     except Exception as e:
         L.log("error", "llm", f"실패 — {e}", {"ms": int((time.time() - t0) * 1000)})
         raise
@@ -199,7 +243,7 @@ def _via_cli(prompt: str) -> str:
         p = subprocess.run(
             ["claude", "-p", "--model", CLAUDE_MODEL, "--output-format", "text"],
             input=prompt, capture_output=True, text=True, encoding="utf-8",
-            shell=(__import__("sys").platform == "win32"),
+                shell=(sys.platform == "win32"),
         )
     except FileNotFoundError as e:
         # 배포 서버에는 Claude Code CLI 가 없다. "spawn claude ENOENT" 의 정체.

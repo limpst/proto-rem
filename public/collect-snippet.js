@@ -1,5 +1,5 @@
 /* ============================================================
-   리멤버 명함 수집 스니펫  (proto-rem)
+   리멤버 명함 수집 스니펫  (SafeLead)
 
    쓰는 법
      1. 이미 로그인된 Chrome 에서 https://card.rememberapp.co.kr/ 를 연다
@@ -14,7 +14,7 @@
    사용자가 저장을 누를 때 로컬 파일로만 내려간다.
    ============================================================ */
 (() => {
-  if (window.__protoRemCollector) { console.log('[proto-rem] 이미 실행 중입니다.'); return; }
+  if (window.__protoRemCollector) { console.log('[SafeLead] 이미 실행 중입니다.'); return; }
   window.__protoRemCollector = true;
 
   const raw = [];
@@ -115,7 +115,7 @@
     color:#e6e9ef;border:1px solid #2a2f3a;border-radius:12px;padding:14px 16px;width:280px;
     font:13px/1.6 system-ui,sans-serif;box-shadow:0 8px 32px rgba(0,0,0,.5)`;
   box.innerHTML = `
-    <div style="font-weight:700;margin-bottom:6px">proto-rem 명함 수집</div>
+    <div style="font-weight:700;margin-bottom:6px">SafeLead 명함 수집</div>
     <div id="pr-stat" style="color:#9aa4b6;font-size:12px;margin-bottom:10px">API 0건 · 명함 0건</div>
     <div style="color:#9aa4b6;font-size:11.5px;margin-bottom:10px">
       명함 목록을 아래로 끝까지 스크롤하세요. 불러온 만큼 아래 숫자가 올라갑니다.</div>
@@ -161,5 +161,5 @@
   };
   box.querySelector('#pr-raw').onclick = () => download(raw, 'remember-api-raw.json');
 
-  console.log('[proto-rem] 수집기 실행됨. 명함 목록을 스크롤한 뒤 [JSON 저장]을 누르세요.');
+  console.log('[SafeLead] 수집기 실행됨. 명함 목록을 스크롤한 뒤 [JSON 저장]을 누르세요.');
 })();

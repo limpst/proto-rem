@@ -492,6 +492,35 @@ const LEGEND = `<div class="muted" style="font-size:11px;margin-bottom:9px;displ
   ${Object.values(SRC).map(v => `<span><b style="color:${v.c}">${v.i}</b> ${esc(v.t.split(' — ')[0])}</span>`).join('')}
 </div>`;
 
+/* 리서치 근거 칸 — 왜 비었는지를 반드시 말한다.
+   예전에는 홈페이지를 못 읽었을 때도, AI 호출이 터졌을 때도, 아직 안 돌렸을 때도
+   똑같이 "아직 안 읽음"으로 보였다. 원인이 다르면 할 일도 다르다. */
+function factsCell(c) {
+  const s = c.signals ?? null;
+  if (s?.facts?.length) {
+    return `${srcTag('ai', '홈페이지에서 AI가 추출')}<ul class="facts">${
+      s.facts.map(f => `<li>${esc(f)}</li>`).join('')}</ul>`;
+  }
+  if (s?._error) {
+    return `<span class="chk f" title="AI 호출 자체가 실패했습니다. STEP 5 의 [AI 엔진] 에서 백엔드를 확인하세요.">AI 호출 실패</span>
+      <div class="muted" style="font-size:10.5px;margin-top:4px">${esc(s._error)}</div>`;
+  }
+  if (s?._skipped) {
+    return `<span class="tag warn">건너뜀</span>
+      <div class="muted" style="font-size:10.5px;margin-top:4px">${esc(s._skipped)}</div>`;
+  }
+  if (s && !s.facts?.length) {
+    return `<span class="tag">근거 없음</span>
+      <div class="muted" style="font-size:10.5px;margin-top:4px">홈페이지는 읽었지만 인용할 사실을 찾지 못했습니다.</div>`;
+  }
+  if (c.siteFetch && !c.siteFetch.ok) {
+    return `<span class="tag bad">읽기 실패</span>
+      <div class="muted" style="font-size:10.5px;margin-top:4px">${esc(c.siteFetch.reason)}</div>`;
+  }
+  return `<span class="muted" style="font-size:11.5px">${
+    c.siteUrl ? '아직 안 읽음 — STEP 3 에서 리서치를 실행하세요' : '홈페이지 주소가 없습니다'}</span>`;
+}
+
 const cardRows = (cards, { pick = true } = {}) => !cards.length
   ? '<div class="muted" style="padding:8px 0">명함이 없습니다. 아래에서 추가하거나 STEP 1 에서 가져오세요.</div>'
   : LEGEND + `<div class="tw"><table><thead><tr>
@@ -541,9 +570,7 @@ const cardRows = (cards, { pick = true } = {}) => !cards.length
           ${(S.segments ?? []).map(s => `<option value="${s.id}"${c.segmentId === s.id ? ' selected' : ''}>${esc(s.label)}</option>`).join('')}
           <option value="internal"${c.segmentId === 'internal' ? ' selected' : ''}>자사 (발송 제외)</option>
         </select></div></td>
-      <td>${c.signals?.facts?.length
-        ? `${srcTag('ai', '홈페이지에서 AI가 추출')}<ul class="facts">${c.signals.facts.map(f => `<li>${esc(f)}</li>`).join('')}</ul>`
-        : `<span class="muted" style="font-size:11.5px">${c.siteFetch ? `읽기 실패 (${esc(c.siteFetch.reason)})` : '아직 안 읽음'}</span>`}</td>
+      <td>${factsCell(c)}</td>
       <td>${editing.has(c.id)
         ? `<button class="ok xs" data-save="${c.id}" title="${T.savecard}">저장</button>
            <button class="ghost xs" data-cancel="${c.id}" style="margin-top:5px"
@@ -576,6 +603,18 @@ const addCardForm = () => `
       <button data-act="addcard" title="${T.addcard}">추가</button>
     </div>
   </div>`;
+
+/* AI 백엔드가 못 쓰는 상태면 어느 화면에서든 먼저 알려 준다.
+   리서치·분류·생성이 전부 여기에 걸려 있어서, 이걸 모르면 "그냥 안 되는" 것으로 보인다. */
+function aiBanner() {
+  const b = S.backend ?? {};
+  if (b.name === 'none') {
+    return `<div class="banner">
+      <b>AI 백엔드가 없어 이 단계를 실행할 수 없습니다.</b><br>${esc(b.hint ?? '')}</div>`;
+  }
+  if (b.note) return `<div class="banner info">${esc(b.note)}</div>`;
+  return '';
+}
 
 /* ── AI 엔진 패널 ─────────────────────────────────────────────────── */
 function enginePanel() {
@@ -854,7 +893,18 @@ atom@atom-eng.co.kr"
       ${cardRows(S.cards ?? [], { pick: false })}
     </div>`,
 
-  enrich: () => `
+  enrich: x => `
+    ${aiBanner()}
+    ${S.warning ? `<div class="banner">${esc(S.warning)}</div>` : ''}
+    <div class="panel">
+      <div class="cap">리서치 현황</div>
+      <div class="muted" style="font-size:12.5px">
+        홈페이지 확보 <b style="color:var(--tx)">${x.site}</b>건 · 근거 확보 <b style="color:var(--tx)">${x.facts}</b>건 ·
+        읽기 실패 <b style="color:var(--tx)">${(S.cards ?? []).filter(c => c.siteFetch && !c.siteFetch.ok).length}</b>건 ·
+        AI 실패 <b style="color:var(--tx)">${(S.cards ?? []).filter(c => c.signals?._error).length}</b>건<br>
+        근거를 못 찾은 회사는 STEP 5 에서 메일 생성이 자동으로 막힙니다 (없는 사실을 지어내지 않기 위해서입니다).
+      </div>
+    </div>
     ${promptPreview ? `
       <div class="panel">
         <div class="cap">AI 에게 실제로 보내는 지시문 · ${esc(promptPreview.mode ?? '')}
@@ -868,6 +918,7 @@ atom@atom-eng.co.kr"
     <div class="panel">${cardRows(S.cards ?? [], { pick: false })}</div>`,
 
   segment: () => `
+    ${aiBanner()}
     <div class="panel">
       <div class="cap">고객군을 한 번에 선택하기</div>
       <div class="row">
@@ -882,7 +933,7 @@ atom@atom-eng.co.kr"
     </div>
     <div class="panel">${cardRows(S.cards ?? [])}</div>`,
 
-  generate: () => enginePanel() + copyStudio() + ((S.cards ?? []).filter(c => c.message).length
+  generate: () => aiBanner() + enginePanel() + copyStudio() + ((S.cards ?? []).filter(c => c.message).length
     ? '<div class="cap" style="margin:22px 0 10px;font-size:12px;color:var(--tx2);font-weight:600">만들어진 초안</div>'
       + (S.cards ?? []).filter(c => c.message).map(msgCard).join('')
     : ''),
@@ -898,7 +949,8 @@ atom@atom-eng.co.kr"
         <span class="muted" style="font-weight:400">파이프라인과 무관하게 한 통만 보내 봅니다</span></div>
       <div style="display:grid;gap:9px;max-width:660px">
         <label class="muted" style="font-size:11.5px">보내는 사람 (고정 — .env 의 GMAIL_USER)</label>
-        <input class="inp" value="${esc(S.smtp?.user ?? '미설정')}" disabled>
+        <input class="inp" value="${esc(S.smtp?.user ?? '미설정')}" disabled
+          title="보내는 주소는 .env 의 GMAIL_USER 로 고정됩니다. 화면에서는 바꿀 수 없습니다.">
         <label class="muted" style="font-size:11.5px">받는 사람</label>
         <input class="inp" id="tsTo" placeholder="test@example.com" value="${esc(S.smtp?.user ?? '')}"
           title="테스트 메일을 받을 주소입니다. 본인 주소를 넣어 스팸함 도착 여부까지 확인해 보세요.">

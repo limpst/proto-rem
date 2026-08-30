@@ -213,17 +213,44 @@ def route(path: str, method: str, body: dict, query: dict):
 
     # --- 3. 리서치 --------------------------------------------------------
     if path == "/api/enrich" and method == "POST":
+        # AI 를 못 쓰는 상태면 12건을 다 돌려 12번 똑같이 실패시키지 않는다.
+        # 원인을 한 줄로 알려주고 즉시 멈추는 편이 낫다.
+        b = llm.resolve_backend(refresh=True)
+        if b["name"] == "none":
+            L.log("error", "enrich", f"리서치 불가 — {b.get('hint')}")
+            return 400, {"error": "AI 백엔드가 없어 리서치를 할 수 없습니다.\n"
+                                  + str(b.get("hint", ""))}
+
         st = store.load()
         if not st.get("sourceProfile"):
             st["sourceProfile"] = enrich.build_source_profile()
         ids = body.get("ids") or []
         targets = [c for c in st["cards"] if not ids or c["id"] in ids]
-        L.log("info", "enrich", f"리서치 시작 — {len(targets)}건")
+        L.log("info", "enrich", f"리서치 시작 — {len(targets)}건",
+              {"backend": b["name"], "model": b["model"]})
+
+        ai_fail = 0
         for c in targets:
             site = enrich.fetch_site(c.get("siteUrl"))
             c["siteFetch"] = {"ok": site["ok"], "reason": site["reason"], "chars": len(site["text"])}
+            if not site["ok"]:
+                # 홈페이지를 못 읽었으면 AI 를 부를 이유가 없다. 호출 낭비를 막는다.
+                c["signals"] = {"facts": [], "building_signals": {}, "confidence": "low",
+                                "_skipped": f"홈페이지를 읽지 못함 ({site['reason']})"}
+                c["status"] = "ENRICHED"
+                continue
             c["signals"] = enrich.extract_signals(c, site["text"])
             c["status"] = "ENRICHED"
+            if c["signals"].get("_error"):
+                ai_fail += 1
+                # 첫 건이 AI 호출 자체로 실패하면 나머지도 같은 이유로 실패한다. 즉시 멈춘다.
+                if ai_fail == 1 and len(targets) > 1:
+                    L.log("error", "enrich",
+                          f"AI 호출 실패로 중단 — {c['signals']['_error']}")
+                    store.save(st)
+                    return 200, full_state(store.load(),
+                                           warning=f"AI 호출이 실패해 리서치를 중단했습니다: "
+                                                   f"{c['signals']['_error']}")
         st["step"] = 3
         return 200, full_state(store.save(st))
 

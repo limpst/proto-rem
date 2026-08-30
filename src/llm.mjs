@@ -79,6 +79,19 @@ export async function resolveBackend({ refresh = false } = {}) {
       name: 'ollama', model, url: OLLAMA_URL, source,
       alive: await ollamaAlive(), cloud: isCloudModel(model),
     };
+  } else if (forced === 'claude-cli' && !claudeCliExists()) {
+    // 강제 지정이라도 실행할 수 없으면 소용없다.
+    // 배포 서버에 LLM_BACKEND=claude-cli 가 남아 있어 "spawn claude ENOENT" 가 났다.
+    cachedBackend = env('ANTHROPIC_API_KEY')
+      ? {
+          name: 'claude-api', model: CLAUDE_MODEL, source, cloud: true,
+          note: 'LLM_BACKEND=claude-cli 로 지정됐지만 이 서버에 Claude CLI 가 없어 API 로 대체했습니다.',
+        }
+      : {
+          name: 'none', model: null, source, cloud: false,
+          hint: 'LLM_BACKEND=claude-cli 로 지정됐지만 이 서버에는 Claude CLI 가 없습니다. '
+              + 'ANTHROPIC_API_KEY 를 설정하고 LLM_BACKEND 를 claude-api 로 바꾸세요.',
+        };
   } else if (forced) {
     cachedBackend = { name: forced, model: CLAUDE_MODEL, source, cloud: true };
   } else if (env('ANTHROPIC_API_KEY')) {
