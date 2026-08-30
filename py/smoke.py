@@ -69,6 +69,15 @@ def step(n, title, fn):
 
 
 def main():
+    # Windows 콘솔 기본 코드페이지(cp949)는 ✔ ✘ 같은 기호를 못 찍고 죽는다.
+    # 결과를 못 보는 것보다 인코딩을 맞추는 편이 낫다.
+    if sys.platform == "win32":
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+            sys.stderr.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--to", default="", help="테스트 메일을 받을 주소")
     ap.add_argument("--real", action="store_true", help="DRY_RUN 을 무시하고 실제로 보낸다")

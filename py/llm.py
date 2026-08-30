@@ -96,8 +96,49 @@ def ollama_alive() -> bool:
         return False
 
 
+WHY = {
+    "ollama": "Ollama 가 응답하지 않습니다 (ollama serve 실행 필요)",
+    "claude-api": "ANTHROPIC_API_KEY 가 없습니다",
+    "claude-cli": "이 서버에 Claude Code CLI 가 설치돼 있지 않습니다",
+}
+
+
+def usable(name: str) -> bool:
+    """그 백엔드를 **지금 실제로 호출할 수 있는지** 확인한다.
+
+    설정이 있다는 것과 쓸 수 있다는 것은 다르다. 이 구분이 없어서
+    배포 서버가 LLM_BACKEND=claude-cli 를 붙들고 매번 호출 시점에 터졌다.
+    """
+    if name == "ollama":
+        return ollama_alive()
+    if name == "claude-api":
+        return bool(env("ANTHROPIC_API_KEY"))
+    if name == "claude-cli":
+        return claude_cli_exists()
+    return False
+
+
+def _make(name: str, source: str, picked: str | None = None, note: str | None = None) -> dict:
+    if name == "ollama":
+        model = picked or DEFAULT_OLLAMA_MODEL
+        b = {"name": "ollama", "model": model, "url": OLLAMA_URL, "source": source,
+             "alive": True, "cloud": is_cloud_model(model)}
+    else:
+        b = {"name": name, "model": CLAUDE_MODEL, "source": source, "cloud": True}
+    if note:
+        b["note"] = note
+    return b
+
+
 def resolve_backend(refresh: bool = False) -> dict:
-    """어떤 백엔드가 실제로 쓰이는지. 대시보드가 이 값을 표시한다."""
+    """어떤 백엔드가 실제로 쓰이는지. 대시보드가 이 값을 표시한다.
+
+    고르는 순서:
+      ① 지정된 것(대시보드 선택 > LLM_BACKEND)을 먼저 본다.
+      ② 그게 **실제로 호출 가능**하면 그대로 쓴다.
+      ③ 불가능하면 쓸 수 있는 것으로 자동 대체하고, 왜 바꿨는지 note 를 남긴다.
+      ④ 아무것도 없으면 name='none' 으로 정직하게 멈춘다. 호출 시점에 터지게 두지 않는다.
+    """
     global _cached_backend, _cached_override
     if refresh:
         _cached_backend = None
@@ -106,42 +147,35 @@ def resolve_backend(refresh: bool = False) -> dict:
         return _cached_backend
 
     ov = _override() or {}
-    forced = ov.get("name") or env("LLM_BACKEND")
+    wanted = ov.get("name") or env("LLM_BACKEND")
     picked = ov.get("model")
     source = "dashboard" if ov.get("name") else ("env" if env("LLM_BACKEND") else "auto")
 
-    if forced == "ollama" or (not forced and ollama_alive()):
-        model = picked or DEFAULT_OLLAMA_MODEL
-        _cached_backend = {"name": "ollama", "model": model, "url": OLLAMA_URL,
-                           "source": source, "alive": ollama_alive(), "cloud": is_cloud_model(model)}
-    elif forced == "claude-cli" and not claude_cli_exists():
-        # 강제 지정이라도 실행할 수 없으면 소용없다.
-        # Render 환경변수에 LLM_BACKEND=claude-cli 가 남아 있어 리서치가 통째로 죽었다.
-        if env("ANTHROPIC_API_KEY"):
-            _cached_backend = {
-                "name": "claude-api", "model": CLAUDE_MODEL, "source": source, "cloud": True,
-                "note": "LLM_BACKEND=claude-cli 로 지정됐지만 이 서버에 Claude CLI 가 없어 API 로 대체했습니다.",
-            }
-        else:
-            _cached_backend = {
-                "name": "none", "model": None, "source": source, "cloud": False,
-                "hint": "LLM_BACKEND=claude-cli 로 지정돼 있는데 이 서버에는 Claude CLI 가 없습니다. "
-                        "Render 대시보드 > Environment 에서 LLM_BACKEND 를 claude-api 로 바꾸고 "
-                        "ANTHROPIC_API_KEY 를 넣으세요.",
-            }
-    elif forced:
-        _cached_backend = {"name": forced, "model": CLAUDE_MODEL, "source": source, "cloud": True}
-    elif env("ANTHROPIC_API_KEY"):
-        _cached_backend = {"name": "claude-api", "model": CLAUDE_MODEL, "source": source, "cloud": True}
-    elif claude_cli_exists():
-        _cached_backend = {"name": "claude-cli", "model": CLAUDE_MODEL, "source": source, "cloud": True}
-    else:
-        # 셋 다 없다. 여기서 정직하게 멈춘다. 예전에는 claude-cli 로 넘어가 배포 서버에서 터졌다.
-        _cached_backend = {
-            "name": "none", "model": None, "source": source, "cloud": False,
-            "hint": "쓸 수 있는 AI 백엔드가 없습니다. 배포 환경이라면 ANTHROPIC_API_KEY 를 설정하고 "
-                    "LLM_BACKEND=claude-api 로 두세요. 내 컴퓨터라면 Ollama 를 실행하세요.",
-        }
+    if wanted and usable(wanted):
+        _cached_backend = _make(wanted, source, picked)
+        return _cached_backend
+
+    # 지정된 것을 못 쓴다 → 쓸 수 있는 것으로 대체한다.
+    for cand in ("ollama", "claude-api", "claude-cli"):
+        if not usable(cand):
+            continue
+        note = None
+        if wanted:
+            note = (f"{wanted} 로 지정돼 있지만 {WHY.get(wanted, '사용할 수 없어')} "
+                    f"{cand} 로 대체했습니다.")
+            L.log("warn", "llm", note)
+        _cached_backend = _make(cand, source if not wanted else "fallback",
+                                picked if cand == "ollama" else None, note)
+        return _cached_backend
+
+    # 셋 다 없다. 예전에는 claude-cli 로 넘어가 배포 서버에서 "spawn claude ENOENT" 로 터졌다.
+    _cached_backend = {
+        "name": "none", "model": None, "source": source, "cloud": False,
+        "hint": ((f"{wanted} 로 지정돼 있는데 {WHY.get(wanted, '사용할 수 없습니다')}. " if wanted else "")
+                 + "쓸 수 있는 AI 백엔드가 없습니다. 배포 환경이라면 Render > Environment 에 "
+                   "ANTHROPIC_API_KEY 를 넣고 LLM_BACKEND=claude-api 로 두세요. "
+                   "내 컴퓨터라면 Ollama 를 실행하세요."),
+    }
     return _cached_backend
 
 

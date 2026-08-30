@@ -28,6 +28,7 @@ from . import classify_ai, copy_ai, deliver, enrich, generate, llm, normalize, r
 from . import log as L
 from .domain import COMPANY, PERSONAS, SEGMENTS, classify
 from .domain import segment as seg_of
+from .env import settings_view, write_env
 
 ROOT = Path(__file__).resolve().parent.parent
 PUBLIC = ROOT / "public"
@@ -210,6 +211,25 @@ def route(path: str, method: str, body: dict, query: dict):
             c["siteUrl"] = (u if u.startswith("http") else f"https://{u}") if u else ""
             c["siteResolve"] = {"via": "manual" if u else "none", "tried": []}
         return 200, full_state(store.update(apply))
+
+    # --- 관리자 설정 (톱니바퀴) ---------------------------------------------
+    # .env 를 화면에서 직접 읽고 고친다. 이 서버에는 로그인이 없으므로
+    # 비밀값은 기본적으로 가려서 내보내고, 명시적으로 요청할 때만 원문을 준다.
+    if path == "/api/settings" and method == "GET":
+        return 200, {"items": settings_view(reveal=False)}
+
+    if path == "/api/settings" and method == "POST":
+        if body.get("reveal"):
+            return 200, {"items": settings_view(reveal=True)}
+        updates = body.get("updates") or {}
+        if not isinstance(updates, dict) or not updates:
+            return 400, {"error": "바꿀 항목이 없습니다."}
+        r = write_env({str(k): str(v) for k, v in updates.items()})
+        llm.resolve_backend(refresh=True)       # 백엔드 설정이 바뀌었을 수 있다
+        L.log("ok", "settings", f"설정 변경 — 수정 {len(r['changed'])} · 추가 {len(r['added'])} · 삭제 {len(r['removed'])}",
+              {"keys": r["changed"] + r["added"] + r["removed"]})
+        needs_restart = any(k in ("PORT", "TENANT_ID") for k in updates)
+        return 200, {"items": settings_view(reveal=False), "result": r, "needsRestart": needs_restart}
 
     # --- 3. 리서치 --------------------------------------------------------
     if path == "/api/enrich" and method == "POST":
@@ -561,12 +581,22 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):   # 기본 stderr 로그는 끄고 L.log 로 통일
         pass
 
-    def _send(self, code: int, payload, ctype="application/json; charset=utf-8"):
+    def _send(self, code: int, payload, ctype="application/json; charset=utf-8", headers=None):
         raw = payload if isinstance(payload, bytes) else json.dumps(
             payload, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(code)
         self.send_header("content-type", ctype)
         self.send_header("content-length", str(len(raw)))
+        # 캐시 금지가 기본이다.
+        # API 응답은 화면 상태 그 자체라 한 번이라도 캐시되면 거짓 화면이 된다.
+        # 프런트(app.js)도 마찬가지다 — 배포해도 브라우저가 옛 파일을 계속 쓰면
+        # "고쳤는데 화면은 그대로"가 되어 없는 버그를 쫓게 된다.
+        # 정적 파일만 아래에서 no-cache + ETag 로 덮어쓴다(재검증은 하되 재다운로드는 아낀다).
+        hdrs = headers or {}
+        if not any(k.lower() == "cache-control" for k in hdrs):
+            self.send_header("cache-control", "no-store")
+        for k, v in hdrs.items():
+            self.send_header(k, v)
         # 리멤버 페이지에 붙여넣은 스니펫이 이 서버로 직접 명함을 보낼 수 있어야 하므로
         # CORS 를 연다. 로컬 전용 도구라 허용 범위를 넓게 둔다.
         self.send_header("access-control-allow-origin", "*")
@@ -619,7 +649,19 @@ class Handler(BaseHTTPRequestHandler):
         ctype = mimetypes.guess_type(str(fp))[0] or "application/octet-stream"
         if ctype.startswith("text/") or ctype in ("application/javascript", "application/json"):
             ctype += "; charset=utf-8"
-        self._send(200, fp.read_bytes(), ctype)
+
+        # no-cache = "쓰기 전에 매번 물어봐라"(캐시 금지가 아니다).
+        # 파일이 그대로면 304 로 답해 재다운로드는 아끼고, 바뀌면 즉시 새 파일이 간다.
+        st = fp.stat()
+        etag = f'W/"{int(st.st_mtime)}-{st.st_size}"'
+        if self.headers.get("if-none-match") == etag:
+            self.send_response(304)
+            self.send_header("etag", etag)
+            self.send_header("cache-control", "no-cache")
+            self.end_headers()
+            return
+        self._send(200, fp.read_bytes(), ctype,
+                   {"etag": etag, "cache-control": "no-cache"})
 
 
 def main():

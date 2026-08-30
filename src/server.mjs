@@ -45,7 +45,11 @@ export const STEPS = [
  * 조립해 그 사고를 구조적으로 막는다.
  */
 const json = (res, code, body) => {
-  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' });
+  // 상태 응답은 절대 캐시되면 안 된다. 캐시되는 순간 화면이 거짓말을 한다.
+  res.writeHead(code, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+  });
   res.end(JSON.stringify(body));
 };
 const readBody = req => new Promise(r => {
@@ -144,9 +148,7 @@ const server = http.createServer(async (req, res) => {
         '고객군', '분류출처', '제외', '근거수', '근거', '상태',
         '채널', '모드', '제목', '본문', '검토상태', '검증통과', '발송시각'];
       const q = v => {
-        const t = String(v ?? '').replace(/
-?
-/g, ' ');
+        const t = String(v ?? '').replace(/\r?\n/g, ' ');
         return /[",]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
       };
       const rows = st.cards.map(c => {
@@ -165,9 +167,7 @@ const server = http.createServer(async (req, res) => {
         ].map(q).join(',');
       });
       // 엑셀이 UTF-8 을 알아보게 BOM 을 붙인다. 없으면 한글이 깨진다.
-      const csv = '﻿' + [cols.join(','), ...rows].join('
-
-');
+      const csv = '﻿' + [cols.join(','), ...rows].join('\r\n');
       res.writeHead(200, {
         'content-type': 'text/csv; charset=utf-8',
         'content-disposition': `attachment; filename="safelead-${new Date().toISOString().slice(0, 10)}.csv"`,
@@ -463,7 +463,19 @@ const server = http.createServer(async (req, res) => {
     const fp = path.join(ROOT, 'public', file);
     if (fs.existsSync(fp) && fs.statSync(fp).isFile()) {
       const type = fp.endsWith('.js') ? 'text/javascript' : fp.endsWith('.css') ? 'text/css' : 'text/html';
-      res.writeHead(200, { 'content-type': `${type}; charset=utf-8` });
+      // 배포 후에도 브라우저가 옛 app.js 를 쓰면 "고쳤는데 그대로"가 된다.
+      // no-cache 로 매번 재검증시키되, 안 바뀌었으면 304 로 넘긴다.
+      const st = fs.statSync(fp);
+      const etag = `W/"${Math.floor(st.mtimeMs)}-${st.size}"`;
+      if (req.headers['if-none-match'] === etag) {
+        res.writeHead(304, { etag, 'cache-control': 'no-cache' });
+        return res.end();
+      }
+      res.writeHead(200, {
+        'content-type': `${type}; charset=utf-8`,
+        'cache-control': 'no-cache',
+        etag,
+      });
       return res.end(fs.readFileSync(fp));
     }
     json(res, 404, { error: 'not found' });

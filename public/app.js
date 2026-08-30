@@ -340,7 +340,13 @@ function draw(loading) {
         <div class="sb">${esc(SHORT[s.id] ?? '')}</div>
       </div>
     </div>`;
-  }).join('');
+  }).join('') + `
+    <div class="step ${viewStep === 'settings' ? 'active' : ''}" data-n="settings"
+      style="margin-top:10px;border-top:1px solid var(--line);padding-top:13px"
+      title="메일 계정·AI 키·발송 안전장치 같은 환경 설정을 여기서 직접 고칩니다.">
+      <div class="num">⚙</div>
+      <div><div class="lb">관리자 설정</div><div class="sb">메일 · AI 키 · 안전장치</div></div>
+    </div>`;
 
   const b = S.backend ?? {};
   // 백엔드가 없으면 STEP 3·5 가 반드시 실패한다. 시도하기 전에 사이드바에서 먼저 보여준다.
@@ -725,6 +731,75 @@ function copyStudio() {
 }
 
 /* ── 단계별 본문 ───────────────────────────────────────────────────── */
+
+/* ── 관리자 설정(⚙) ─────────────────────────────────────────
+   .env 를 화면에서 직접 고친다. 각 항목이 "무엇인지" 뿐 아니라
+   "바꾸면 업무상 무엇이 달라지는지"를 같이 적어 둔다. */
+let SETTINGS = null;        // [{key,label,group,value,secret,set,what,why}]
+let settingsReveal = false;
+const settingsEdits = {};   // 저장 전 임시 입력값
+
+async function loadSettings(reveal = false) {
+  const r = reveal
+    ? await api('/api/settings', { reveal: true })
+    : await (await fetch('/api/settings')).json();
+  SETTINGS = r.items ?? [];
+  settingsReveal = reveal;
+  return SETTINGS;
+}
+
+function settingsView() {
+  if (!SETTINGS) return '<div class="panel muted">설정을 불러오는 중…</div>';
+  const groups = [...new Set(SETTINGS.map(i => i.group))];
+  const dirty = Object.keys(settingsEdits).length;
+
+  return `
+    <div class="banner">이 화면은 <code>.env</code> 파일을 직접 고칩니다.
+      <b>이 서버에는 로그인이 없습니다</b> — 사내망이나 공용 와이파이에 포트를 열어두지 마세요.
+      비밀값은 가려서 표시하며, 저장하지 않은 채 화면을 옮기면 입력한 내용은 사라집니다.</div>
+
+    <div class="panel">
+      <div class="row">
+        <button data-act="settings-save" ${dirty ? '' : 'disabled'}>변경 저장${dirty ? ` (${dirty}건)` : ''}</button>
+        <button class="ghost" data-act="settings-reveal">${settingsReveal ? '비밀값 가리기' : '비밀값 보기'}</button>
+        <button class="ghost" data-act="settings-reload">다시 불러오기</button>
+        <span class="muted" style="font-size:12px">
+          비워서 저장하면 그 항목을 삭제하고 기본값으로 되돌립니다.</span>
+      </div>
+    </div>
+
+    ${groups.map(g => `
+      <div class="panel">
+        <div class="cap">${esc(g)}</div>
+        ${SETTINGS.filter(i => i.group === g).map(i => {
+          const val = settingsEdits[i.key] ?? i.value ?? '';
+          const isBool = i.type === 'bool';
+          return `
+          <div style="padding:13px 0;border-bottom:1px solid var(--line)">
+            <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap">
+              <b style="font-size:13.5px">${esc(i.label)}</b>
+              <code style="font-size:10.5px;color:var(--tx3)">${esc(i.key)}</code>
+              ${i.set ? '<span class="tag ok">설정됨</span>' : '<span class="tag">비어 있음</span>'}
+              ${i.secret ? '<span class="tag warn">비밀값</span>' : ''}
+              ${i.fromOsEnv ? '<span class="tag" title="실행할 때 지정된 값이 .env 보다 우선합니다">실행 인자 우선</span>' : ''}
+            </div>
+            <div class="muted" style="font-size:12px;margin:5px 0 3px">${esc(i.what)}</div>
+            <div style="font-size:12px;color:var(--tx2);margin-bottom:8px">${esc(i.why)}</div>
+            ${isBool
+              ? `<div class="row">
+                   <button class="opt ${String(val) === '1' ? 'on' : ''}" style="width:auto;padding:7px 14px"
+                     data-set="${i.key}" data-val="1">켜기 (1)</button>
+                   <button class="opt ${String(val) !== '1' ? 'on' : ''}" style="width:auto;padding:7px 14px"
+                     data-set="${i.key}" data-val="">끄기</button>
+                 </div>`
+              : `<input class="site-in" style="max-width:520px" data-setting="${i.key}"
+                   value="${esc(val)}" placeholder="${esc(i.placeholder ?? '')}"
+                   ${i.secret && !settingsReveal ? 'type="password"' : ''}>`}
+          </div>`;
+        }).join('')}
+      </div>`).join('')}`;
+}
+
 const VIEWS = {
   ingest: () => `
     <details class="panel" open>
@@ -1105,6 +1180,24 @@ const ctxNow = () => ({
 function bind() {
   const acts = {
     ingest: () => api('/api/ingest', {}),
+    'settings-reveal': async () => { await loadSettings(!settingsReveal); return null; },
+    'settings-reload': async () => { Object.keys(settingsEdits).forEach(k => delete settingsEdits[k]); await loadSettings(settingsReveal); return null; },
+    'settings-save': async () => {
+      const updates = { ...settingsEdits };
+      if (!Object.keys(updates).length) return null;
+      const r = await api('/api/settings', { updates });
+      if (r.error) { alert(r.error); return null; }
+      Object.keys(settingsEdits).forEach(k => delete settingsEdits[k]);
+      SETTINGS = r.items ?? SETTINGS;
+      const c = r.result ?? {};
+      alert([
+        '저장했습니다.',
+        `수정 ${(c.changed ?? []).length} · 추가 ${(c.added ?? []).length} · 삭제 ${(c.removed ?? []).length}`,
+        r.needsRestart ? '' : null,
+        r.needsRestart ? '⚠ PORT / TENANT_ID 는 서버를 다시 켜야 적용됩니다.' : null,
+      ].filter(v => v !== null).join('\n'));
+      return api('/api/state');
+    },
     reset: () => confirm('가져온 명함과 만든 메일이 모두 지워집니다. 계속할까요?')
       ? api('/api/reset', {}) : api('/api/state'),
     enrich: () => api('/api/enrich', {}),
@@ -1272,6 +1365,13 @@ function bind() {
       adopt(await api('/api/set-segment', { id: sel.dataset.seg, segmentId: sel.value }));
       render();
     };
+  });
+  document.querySelectorAll('[data-setting]').forEach(inp => {
+    inp.oninput = () => { settingsEdits[inp.dataset.setting] = inp.value; };
+    inp.onchange = () => { settingsEdits[inp.dataset.setting] = inp.value; render(); };
+  });
+  document.querySelectorAll('[data-set]').forEach(b => {
+    b.onclick = () => { settingsEdits[b.dataset.set] = b.dataset.val; render(); };
   });
   document.querySelectorAll('[data-site]').forEach(inp => {
     inp.onchange = async () => {
