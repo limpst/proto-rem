@@ -346,7 +346,8 @@ def parse_json(raw: str, want_list: bool = False):
     """모델 출력에서 JSON 만 건져낸다. 작은 로컬 모델은 설명을 덧붙이는 일이 잦다."""
     m = (_ARR if want_list else _OBJ).search(str(raw or ""))
     if not m:
-        return None
+        # 여는 [ 가 아예 없는 응답도 온다. 객체만 줄줄이 나열하는 경우다.
+        return _salvage_objects(raw) if want_list else None
     try:
         return json.loads(m.group(0))
     except ValueError:
@@ -354,4 +355,49 @@ def parse_json(raw: str, want_list: bool = False):
         try:
             return json.loads(re.sub(r",(\s*[\]}])", r"\1", m.group(0)))
         except ValueError:
-            return None
+            pass
+    return _salvage_objects(raw) if want_list else None
+
+
+def _salvage_objects(raw: str):
+    """대괄호가 없거나 끝이 잘린 응답에서 성한 객체만 건져낸다.
+
+    문구 추천에서 실제로 매번 이런 응답이 온다:
+        ```json
+          {"kind":"subject","text":"..."},
+          {"kind":"subject","text":"..."},
+          {"kind":"subject","tone":"calm"        <- 여기서 잘림
+    여는 [ 가 없고 마지막 객체가 미완성이라 통째로 파싱에 실패했고,
+    그래서 AI 가 만든 문구를 전부 버리고 규칙 폴백으로 떨어졌다(source=rule).
+    중괄호 짝을 세어 완성된 객체만 골라내면 앞의 것들은 그대로 쓸 수 있다.
+    문자열 안의 중괄호와 이스케이프를 건너뛰어야 짝이 어긋나지 않는다.
+    """
+    text = str(raw or "")
+    out, depth, start, in_str, esc = [], 0, -1, False, False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    try:
+                        v = json.loads(text[start:i + 1])
+                        if isinstance(v, dict):
+                            out.append(v)
+                    except ValueError:
+                        pass
+                    start = -1
+    return out or None

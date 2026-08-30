@@ -961,13 +961,25 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
             sel = st.get("selection") or []
             c = next((x for x in st["cards"] if x["id"] in sel), None) or next(iter(_usable(st)), None)
         sid = body.get("segmentId") or (c or {}).get("segmentId")
-        r = copy_ai.suggest(c, sid, keywords=body.get("keywords"), tones=body.get("tones"),
-                            channel=body.get("channel", "email"), count=body.get("count", 30),
-                            source_profile=st.get("sourceProfile"), persona_id=st.get("personaId"))
+        # 문구 추천은 AI 호출이라 20~30초가 걸린다(실측 24.1초). 그동안 HTTP 응답을
+        # 붙잡고 있으면 연결이 먼저 끊겨, 화면에서는 눌러도 아무 일이 일어나지 않는다.
+        # 리서치·문안 생성·발송과 똑같이 작업으로 돌리고 진행률을 물어보게 한다.
+        jid = _job_new("copy", 1)
 
-        def apply(s):
-            s.setdefault("copy", {})[sid or "_"] = {"items": r["items"], "source": r["source"]}
-        return 200, full_state(store.update(apply), copy=r, copySegmentId=sid)
+        def work(job_id: str):
+            _job_set(job_id, current="문구 뽑는 중")
+            r = copy_ai.suggest(c, sid, keywords=body.get("keywords"), tones=body.get("tones"),
+                                channel=body.get("channel", "email"), count=body.get("count", 30),
+                                source_profile=st.get("sourceProfile"), persona_id=st.get("personaId"))
+
+            def apply(s):
+                s.setdefault("copy", {})[sid or "_"] = {"items": r["items"], "source": r["source"]}
+            store.update(apply)
+            # /api/job 이 끝날 때 full_state 위에 이 값들을 얹어 준다. 화면은 S.copy 를 읽는다.
+            _job_set(job_id, done=1, copy=r, copySegmentId=sid)
+
+        _job_run(jid, work)
+        return 202, {"jobId": jid, "total": 1, "status": "running"}
 
     if path == "/api/copy-pick" and method == "POST":
         sid = body.get("segmentId") or "_"

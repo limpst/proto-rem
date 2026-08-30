@@ -1397,11 +1397,20 @@ DRY_RUN=1</pre></div>` : ''}
         <td><span class="tag ${c.status === 'SENT' ? 'ok' : ''}">${esc(c.status)}</span>
           ${c.deliverError ? `<div class="chk f" style="margin-top:4px">${esc(c.deliverError)}</div>` : ''}</td>
         <td class="muted">${esc(c.deliveredAt ?? c.queuedAt) || '-'}</td>
-        <td>${c.status === 'SENT' ? '' : `
-          <button class="ok xs" data-send1="${c.id}" title="${T.sendone}">즉시 발송</button>
-          ${c.status === 'QUEUED'
-            ? `<button class="ghost xs" data-deq="${c.id}" style="margin-top:5px" title="${T.dequeue}">큐에서 빼기</button>`
-            : ''}`}</td></tr>`).join('')
+        <td>${(() => {
+          // 행마다 버튼이 나타났다 사라지면 "왜 이 줄만 없지?" 가 된다.
+          // 모든 줄에 같은 버튼을 두고, 못 누르는 줄은 그 이유를 툴팁으로 밝힌다.
+          const off = c.excluded || c.segmentId === 'internal';
+          const sent = c.status === 'SENT';
+          const queued = c.status === 'QUEUED';
+          return `
+          <button class="ok xs" data-send1="${c.id}" ${off || sent ? 'disabled' : ''}
+            title="${off ? '자사·제외 명함이라 어떤 경로로도 발송되지 않습니다. 표에서 [되돌리기] 하거나 고객군을 바꾸면 대상이 됩니다.'
+              : sent ? '이미 발송된 건입니다. 다시 보내려면 STEP 6 에서 문안을 고쳐 다시 승인하세요.'
+              : T.sendone}">즉시 발송</button>
+          <button class="ghost xs" data-deq="${c.id}" ${queued ? '' : 'disabled'} style="margin-top:5px"
+            title="${queued ? T.dequeue : '이 건은 큐에 올라가 있지 않아 뺄 것이 없습니다. [발송 큐에 넣기] 를 누르면 큐에 들어갑니다.'}">큐에서 빼기</button>`;
+        })()}</td></tr>`).join('')
       || '<tr><td colspan="6" class="muted">아직 없습니다.</td></tr>'}
       </tbody></table></div>
     </div>`,
@@ -1577,11 +1586,12 @@ function bind() {
     },
 
     suggest: async ctx => {
-      const r = await api('/api/copy-suggest', {
+      // 20~30초 걸리는 AI 호출이다. 응답을 기다리면 연결이 끊겨 아무 일도 안 일어난다.
+      const r = await runJob('/api/copy-suggest', {
         keywords: [...pickedKw], tones: [...pickedTone],
         channel: ctx.channel, count: ctx.count,
         segmentId: palette?.target?.segmentId, id: palette?.target?.id,
-      });
+      }, '문구 뽑는 중');
       if (r?.copy?.error) LOG.push('warn', 'copy', `AI 실패, 규칙 폴백 — ${r.copy.error}`);
       return r;
     },
