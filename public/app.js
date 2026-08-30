@@ -706,6 +706,140 @@ function tableBar(key, s, shown, total) {
   </div>`;
 }
 
+
+/* ── 표 도구 — 검색 · 정렬 · 페이징 ────────────────────────────────
+   명함이 수십 건을 넘으면 표가 화면을 넘어가 위쪽 버튼이 안 보이고,
+   찾는 사람을 눈으로 훑게 된다. 표마다 따로 상태를 기억한다. */
+const TBL = {};                        // { [key]: {page,size,q,sort,dir} }
+const PAGE_SIZES = [20, 50, 100, 0];   // 0 = 전체
+
+function tblOf(key) {
+  if (!TBL[key]) TBL[key] = { page: 1, size: 20, q: '', sort: '', dir: 1 };
+  return TBL[key];
+}
+
+const cmp = (a, b) => {
+  const na = Number(a), nb = Number(b);
+  if (!Number.isNaN(na) && !Number.isNaN(nb) && a !== '' && b !== '') return na - nb;
+  return String(a ?? '').localeCompare(String(b ?? ''), 'ko');
+};
+
+/**
+ * @param key   표 구분자
+ * @param list  원본 목록
+ * @param cols  [{k, label, get}] — 정렬·검색에 쓸 열 정의
+ */
+function tableTools(key, list, cols, label = '건') {
+  const st = tblOf(key);
+
+  // 검색 — 정의된 열의 값을 이어붙여 훑는다
+  const q = st.q.trim().toLowerCase();
+  let rows = !q ? list : list.filter(r =>
+    cols.map(c => String(c.get(r) ?? '')).join(' ').toLowerCase().includes(q));
+
+  // 정렬
+  if (st.sort) {
+    const col = cols.find(c => c.k === st.sort);
+    if (col) rows = [...rows].sort((a, b) => cmp(col.get(a), col.get(b)) * st.dir);
+  }
+
+  const total = rows.length;
+  const size = st.size || total || 1;
+  const pages = Math.max(1, Math.ceil(total / size));
+  if (st.page > pages) st.page = pages;
+  const from = (st.page - 1) * size;
+  const paged = st.size ? rows.slice(from, from + size) : rows;
+
+  const head = `<div class="row" style="margin-bottom:10px">
+    <input class="inp" data-tq="${key}" value="${esc(st.q)}" placeholder="검색 — 이름·회사·이메일…"
+      style="width:230px" title="정의된 열의 값을 통째로 훑습니다">
+    ${st.q || st.sort ? `<button class="ghost xs" data-tclear="${key}"
+      title="검색어와 정렬을 지웁니다">필터 지우기</button>` : ''}
+    <span style="flex:1"></span>
+    <span class="muted" style="font-size:11.5px">
+      ${st.q ? `${total.toLocaleString()} / ${list.length.toLocaleString()}${label} (검색됨)`
+             : `${total.toLocaleString()}${label}`}</span>
+  </div>`;
+
+  const th = (c) => {
+    const on = st.sort === c.k;
+    return `<th data-tsort="${key}|${c.k}" style="cursor:pointer;user-select:none;white-space:nowrap"
+      title="클릭하면 이 열로 정렬합니다">${esc(c.label)}
+      <span style="color:${on ? 'var(--br)' : 'var(--tx3)'};font-size:9px">
+        ${on ? (st.dir > 0 ? '▲' : '▼') : '⇅'}</span></th>`;
+  };
+
+  const btn = (p, lb, on = false, dis = false) =>
+    `<button class="ghost xs" data-pg="${key}" data-pgv="${p}" ${dis ? 'disabled' : ''}
+      style="${on ? 'border-color:var(--br);color:#cfe0ff' : ''}">${lb}</button>`;
+
+  const nums = [];
+  for (let p = 1; p <= pages; p++) {
+    if (p === 1 || p === pages || Math.abs(p - st.page) <= 2) nums.push(p);
+    else if (nums[nums.length - 1] !== '…') nums.push('…');
+  }
+
+  const bar = (total <= PAGE_SIZES[0] && st.size === 20) ? '' :
+    `<div class="row" style="margin-top:11px;padding-top:11px;border-top:1px solid var(--line)">
+      <span class="muted" style="font-size:11.5px">
+        ${total ? (from + 1).toLocaleString() : 0}–${Math.min(from + paged.length, total).toLocaleString()} / ${total.toLocaleString()}${label}</span>
+      <span style="flex:1"></span>
+      ${btn(st.page - 1, '이전', false, st.page <= 1)}
+      ${nums.map(p => p === '…'
+        ? '<span class="muted" style="font-size:11px;padding:0 3px">…</span>'
+        : btn(p, p, p === st.page)).join('')}
+      ${btn(st.page + 1, '다음', false, st.page >= pages)}
+      <select class="inp" data-pgsize="${key}" style="width:88px;font-size:11.5px;padding:4px 7px"
+        title="한 쪽에 보여줄 건수">
+        ${PAGE_SIZES.map(n => `<option value="${n}" ${st.size === n ? 'selected' : ''}>${n ? n + '건씩' : '전체'}</option>`).join('')}
+      </select>
+    </div>`;
+
+  return { rows: paged, head, bar, th, total };
+}
+
+/** 목록을 잘라 준다. { rows, bar } — bar 는 표 아래에 붙일 HTML. */
+function paginate(key, list, label = '건') {
+  const st = pageOf(key);
+  const total = list.length;
+  const size = st.size || total || 1;
+  const pages = Math.max(1, Math.ceil(total / size));
+  if (st.page > pages) st.page = pages;
+  const from = (st.page - 1) * size;
+  const rows = st.size ? list.slice(from, from + size) : list;
+
+  if (total <= PAGE_SIZES[0] && st.size === 20) return { rows, bar: '' };
+
+  const btn = (p, lb, on = false, dis = false) =>
+    `<button class="ghost xs" data-pg="${key}" data-pgv="${p}" ${dis ? 'disabled' : ''}
+      style="${on ? 'border-color:var(--br);color:#cfe0ff' : ''}">${lb}</button>`;
+
+  // 페이지가 많아도 버튼은 앞뒤 2개씩만 보여준다
+  const nums = [];
+  for (let p = 1; p <= pages; p++) {
+    if (p === 1 || p === pages || Math.abs(p - st.page) <= 2) nums.push(p);
+    else if (nums[nums.length - 1] !== '…') nums.push('…');
+  }
+
+  return {
+    rows,
+    bar: `<div class="row" style="margin-top:11px;padding-top:11px;border-top:1px solid var(--line)">
+      <span class="muted" style="font-size:11.5px">
+        ${total.toLocaleString()}${label} 중 ${total ? (from + 1).toLocaleString() : 0}–${Math.min(from + rows.length, total).toLocaleString()}</span>
+      <span style="flex:1"></span>
+      ${btn(st.page - 1, '이전', false, st.page <= 1)}
+      ${nums.map(p => p === '…'
+        ? '<span class="muted" style="font-size:11px;padding:0 2px">…</span>'
+        : btn(p, p, p === st.page)).join('')}
+      ${btn(st.page + 1, '다음', false, st.page >= pages)}
+      <select class="inp" data-pgsize="${key}" style="width:88px;font-size:11.5px;padding:4px 7px"
+        title="한 쪽에 보여줄 건수">
+        ${PAGE_SIZES.map(n => `<option value="${n}" ${st.size === n ? 'selected' : ''}>${n ? n + '건씩' : '전체'}</option>`).join('')}
+      </select>
+    </div>`,
+  };
+}
+
 const cardRows = (cards, { pick = true, key = 'cards' } = {}) => {
   if (!cards.length) {
     return '<div class="muted" style="padding:8px 0">명함이 없습니다. 아래에서 추가하거나 STEP 1 에서 가져오세요.</div>';
@@ -1380,13 +1514,40 @@ DRY_RUN=1</pre></div>` : ''}
       <div class="muted" style="font-size:12.5px">
         승인한 메일만 나갑니다 · 밤 9시~아침 8시 발송 차단 · (광고) 표기와 수신거부 안내 자동 삽입</div>
     </div>
+    ${(() => {
+      const hist = (S.cards ?? []).filter(c => c.message);
+      const COLS = [
+        { k: 'name', label: '담당자', get: c => c.name },
+        { k: 'company', label: '회사', get: c => c.company },
+        { k: 'email', label: '수신', get: c => c.email },
+        { k: 'status', label: '상태', get: c => c.status },
+        { k: 'when', label: '시각', get: c => c.deliveredAt ?? c.queuedAt ?? '' },
+      ];
+      const t = tableTools('deliver', hist, COLS);
+      const cnt = {
+        sent: hist.filter(c => c.status === 'SENT').length,
+        queued: hist.filter(c => c.status === 'QUEUED').length,
+        failed: hist.filter(c => c.status === 'SEND_FAILED' || c.deliverError).length,
+        noMail: hist.filter(c => !c.email).length,
+      };
+      window.__delivRows = t.rows;   // 아래 map 이 쓰도록 넘긴다
+      return `
     <div class="panel">
-      <div class="cap">발송 이력
-        ${(S.cards ?? []).some(c => c.status === 'QUEUED')
-          ? `<button class="ghost xs" data-act="dequeueall" style="margin-left:8px"
-               title="${T.dequeueAll}">큐 비우기</button>` : ''}</div>
-      <div class="tw"><table><thead><tr><th>담당자</th><th>회사</th><th>수신</th><th>상태</th><th>시각</th><th style="width:84px">관리</th></tr></thead><tbody>
-      ${(S.cards ?? []).filter(c => c.message).map(c => `<tr>
+      <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:10px">
+        <div class="cap" style="margin:0">발송 이력</div>
+        <span class="tag ok">발송 ${cnt.sent}</span>
+        <span class="tag">큐 ${cnt.queued}</span>
+        ${cnt.failed ? `<span class="tag bad">실패 ${cnt.failed}</span>` : ''}
+        ${cnt.noMail ? `<span class="tag warn">주소없음 ${cnt.noMail}</span>` : ''}
+        <span style="flex:1"></span>
+        ${cnt.queued ? `<button class="ghost xs" data-act="dequeueall"
+               title="${T.dequeueAll}">큐 비우기</button>` : ''}
+        <button class="ghost xs" data-act="clearhistory" ${hist.length ? '' : 'disabled'}
+          title="발송 이력과 만들어진 문안을 전부 지웁니다. 명함은 남습니다. 되돌릴 수 없습니다.">이력 전체 삭제</button>
+      </div>
+      ${t.head}
+      <div class="tw"><table><thead><tr>${COLS.map(t.th).join('')}<th style="width:84px">관리</th></tr></thead><tbody>
+      ${t.rows.map(c => `<tr>
         <td>${esc(c.name)}</td><td>${esc(c.company)}</td>
         <td class="muted">${editMail.has(c.id)
           ? `<input class="inp f-mail" value="${esc(c.email)}" placeholder="이메일 주소"
@@ -1411,9 +1572,12 @@ DRY_RUN=1</pre></div>` : ''}
           <button class="ghost xs" data-deq="${c.id}" ${queued ? '' : 'disabled'} style="margin-top:5px"
             title="${queued ? T.dequeue : '이 건은 큐에 올라가 있지 않아 뺄 것이 없습니다. [발송 큐에 넣기] 를 누르면 큐에 들어갑니다.'}">큐에서 빼기</button>`;
         })()}</td></tr>`).join('')
-      || '<tr><td colspan="6" class="muted">아직 없습니다.</td></tr>'}
+      || `<tr><td colspan="6" class="muted">${t.total === 0 && hist.length
+            ? '검색 조건에 맞는 건이 없습니다.' : '아직 없습니다.'}</td></tr>`}
       </tbody></table></div>
-    </div>`,
+      ${t.bar}
+    </div>`;
+    })()}`,
 };
 
 function msgCard(c) {
@@ -1564,6 +1728,17 @@ function bind() {
     resolvesites: async () => { await runJob('/api/resolve-sites', {}, '홈페이지 찾는 중'); return null; },
     deliver: () => api('/api/deliver', { confirm: false }),
     dequeueall: () => api('/api/dequeue', {}),
+    clearhistory: async () => {
+      const n = (S.cards ?? []).filter(c => c.message).length;
+      if (!confirm(`발송 이력과 만들어진 문안 ${n}건을 전부 지웁니다.
+명함은 남습니다. 되돌릴 수 없습니다.
+
+계속할까요?`)) return null;
+      const r = await api('/api/clear-history', {});
+      if (r.error) { toast(r.error, true); return null; }
+      toast(`이력 ${r.cleared ?? n}건을 지웠습니다.`);
+      return r;
+    },
 
     addcard: async () => {
       if (!String(AC.name ?? '').trim()) { toast('이름은 반드시 필요합니다.', true); return null; }
@@ -1807,6 +1982,60 @@ function bind() {
     };
   });
   // 명함 추가 폼 — 값은 AC 에 들고 있는다. render() 가 DOM 을 갈아엎어도 살아남는다.
+  // 표 도구 — 검색·정렬·페이징. 상태는 TBL 에 두어 다시 그려도 유지된다.
+  document.querySelectorAll('[data-tq]').forEach(el => {
+    el.oninput = () => { const st = tblOf(el.dataset.tq); st.q = el.value; st.page = 1; render(); 
+      const again = document.querySelector(`[data-tq="${el.dataset.tq}"]`);
+      if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); } };
+  });
+  document.querySelectorAll('[data-tsort]').forEach(el => {
+    el.onclick = () => {
+      const [key, col] = el.dataset.tsort.split('|');
+      const st = tblOf(key);
+      if (st.sort === col) st.dir = -st.dir; else { st.sort = col; st.dir = 1; }
+      render();
+    };
+  });
+  document.querySelectorAll('[data-pg]').forEach(el => {
+    el.onclick = () => { tblOf(el.dataset.pg).page = Number(el.dataset.pgv); render(); };
+  });
+  document.querySelectorAll('[data-pgsize]').forEach(el => {
+    el.onchange = () => { const st = tblOf(el.dataset.pgsize); st.size = Number(el.value); st.page = 1; render(); };
+  });
+  document.querySelectorAll('[data-tclear]').forEach(el => {
+    el.onclick = () => { const st = tblOf(el.dataset.tclear); st.q = ''; st.sort = ''; st.dir = 1; st.page = 1; render(); };
+  });
+
+  // 표 도구 — 검색·정렬·페이징. 상태는 TBL 에 두어 다시 그려도 유지된다.
+  document.querySelectorAll('[data-tq]').forEach(el => {
+    el.oninput = () => {
+      const key = el.dataset.tq;
+      const st = tblOf(key);
+      st.q = el.value; st.page = 1;
+      render();
+      // 다시 그리면 입력칸이 새로 생겨 포커스가 날아간다. 커서를 되돌려 놓는다.
+      const again = document.querySelector(`[data-tq="${key}"]`);
+      if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+    };
+  });
+  document.querySelectorAll('[data-tsort]').forEach(el => {
+    el.onclick = () => {
+      const [key, col] = el.dataset.tsort.split('|');
+      const st = tblOf(key);
+      if (st.sort === col) st.dir = -st.dir; else { st.sort = col; st.dir = 1; }
+      render();
+    };
+  });
+  document.querySelectorAll('[data-pg]').forEach(el => {
+    el.onclick = () => { tblOf(el.dataset.pg).page = Number(el.dataset.pgv); render(); };
+  });
+  document.querySelectorAll('[data-pgsize]').forEach(el => {
+    el.onchange = () => { const st = tblOf(el.dataset.pgsize); st.size = Number(el.value); st.page = 1; render(); };
+  });
+  document.querySelectorAll('[data-tclear]').forEach(el => {
+    el.onclick = () => { const st = tblOf(el.dataset.tclear); st.q = ''; st.sort = ''; st.dir = 1; st.page = 1; render(); };
+  });
+
   document.querySelectorAll('[data-ac]').forEach(el => {
     const k = el.dataset.ac;
     el.oninput = () => { AC[k] = el.value; };
@@ -2041,10 +2270,10 @@ async function runJob(startPath, startBody, label) {
     render(`${label} — ${done}/${total || '?'}${j.current ? ` · ${j.current}` : ''}`);
     if (j.status === 'done' || j.status === 'cancelled') {
       adopt(j);
-      if (j.failed) log('warn', '작업', `${label} — ${j.failed}건 건너뜀 (기본값으로 대체)`,
+      if (j.failed) LOG.push('warn', '작업', `${label} — ${j.failed}건 건너뜀 (기본값으로 대체)`,
                         (j.errors ?? []).slice(0, 3).join(' / '));
       if (j.status === 'cancelled') {
-        log('warn', '작업', `${label} — 중지됨. 남은 건은 업종 표준값으로 채웠습니다.`, j.current ?? '');
+        LOG.push('warn', '작업', `${label} — 중지됨. 남은 건은 업종 표준값으로 채웠습니다.`, j.current ?? '');
       }
       return j;
     }
@@ -2146,7 +2375,7 @@ const SC_RUN = {
     if (!n) {
       // 명함이 없으면 시드 샘플로라도 채워 다음 단계로 간다.
       // 여기서 멈추면 나머지 6단계를 아예 확인할 수 없다.
-      log('warn', '작업', 'STEP 1 — 명함이 없어 샘플 시드로 대체합니다');
+      LOG.push('warn', '작업', 'STEP 1 — 명함이 없어 샘플 시드로 대체합니다');
       const seed = await api('/api/ingest', { mode: 'replace' });
       if (!seed.error) { adopt(seed); n = (seed.cards ?? []).length; }
       if (!n) throw new Error('명함을 하나도 확보하지 못했습니다.');
@@ -2208,7 +2437,7 @@ const SC_RUN = {
     // 여기서 멈추면 5~7단계를 확인할 수 없다. 대체분은 '기본값 대체'로 표시된다.
     if (stats().usable.some(c => c.segmentId === 'unclassified')) {
       const fb = await api('/api/segment', { fallback: true, defaultSegment: 'safety' });
-      if (!fb.error) { adopt(fb); log('warn', '작업', 'STEP 4 — 미분류를 기본 고객군으로 대체'); }
+      if (!fb.error) { adopt(fb); LOG.push('warn', '작업', 'STEP 4 — 미분류를 기본 고객군으로 대체'); }
     }
     const ids = stats().usable
       .filter(c => c.segmentId && !['unclassified', 'internal', 'excluded'].includes(c.segmentId))

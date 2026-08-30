@@ -496,6 +496,29 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
               f"리서치 건너뜀 — 보관본 {used}건 · 유사업종 {proxied}건 · 업종 표준값 {missing}건")
         return 200, full_state(st2, skipped={"used": used, "proxy": proxied, "fallback": missing})
 
+    # --- 발송 이력 전체 삭제 -----------------------------------------------
+    # 문안·승인·발송 기록만 지운다. 명함과 리서치 근거는 남긴다.
+    # 명함까지 지우려면 [전체 초기화] 를 쓴다 — 둘을 갈라 두어야
+    # "이력만 정리하려다 명함을 통째로 잃는" 사고가 안 난다.
+    if path == "/api/clear-history" and method == "POST":
+        n = 0
+
+        def apply(st):
+            nonlocal n
+            for c in st["cards"]:
+                if not c.get("message"):
+                    continue
+                n += 1
+                for k in ("message", "deliveredAt", "queuedAt", "deliverError"):
+                    c.pop(k, None)
+                # 상태는 리서치까지 되돌린다. 근거가 있으면 ENRICHED, 없으면 분류 상태.
+                c["status"] = "ENRICHED" if (c.get("signals") or {}).get("facts") else "SCORED"
+            st["templates"] = {}
+            st["step"] = 4
+        st2 = store.update(apply)
+        L.log("warn", "deliver", f"발송 이력 전체 삭제 — {n}건 (명함·근거는 유지)")
+        return 200, full_state(st2, cleared=n)
+
     # --- 시나리오 실행 기록 -------------------------------------------------
     # 화면 메모리에만 두면 새로고침에 사라진다. 어제 돌린 결과를 오늘 다시
     # 봐야 하는 일이 잦으므로 DB(meta)에 남긴다.
