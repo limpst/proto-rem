@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: proto-rem
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/state
+    envVars:
+      # 서버에는 Ollama 가 없으므로 Claude API 를 쓴다.
+      - key: LLM_BACKEND
+        value: claude-api
+      # 아래 값들은 Render 대시보드에서 직접 입력한다 (저장소에 두지 않는다).
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GMAIL_USER
+        sync: false
+      - key: GMAIL_APP_PASSWORD
+        sync: false
+      - key: GMAIL_FROM_NAME
+        sync: false
+      # 실전 발송 전까지는 1로 둔다.
+      - key: DRY_RUN
+        value: "1"
