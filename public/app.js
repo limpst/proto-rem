@@ -281,7 +281,11 @@ function todoFor(n, x) {
       : x.selected === 0
         ? { t: '지금 할 일', m: '보낼 사람을 직접 고르세요', s: '분류는 자동이지만 선택은 사람이 합니다. 지금 연락해도 되는 관계인지는 담당자만 압니다.' }
         : { t: '완료', m: `${x.selected}명을 발송 대상으로 정했습니다`, s: 'STEP 5 에서 문구를 고르고 메일을 만듭니다.', done: true },
-    5: x.selected === 0
+    5: x.selected > 0 && x.facts === 0 && x.drafted === 0
+      ? { t: '주의', m: `대상 ${x.selected}명인데 근거가 하나도 없습니다`,
+          s: 'STEP 3 을 아직 하지 않았습니다. 이대로 만들면 회사 고유 내용 없이 업종 일반론으로만 쓰입니다. '
+           + '먼저 STEP 3 에서 [저장된 분석으로 건너뛰기] 나 [홈페이지 새로 읽기] 를 눌러 주세요.', blocked: true }
+      : x.selected === 0
       ? { t: '막힘', m: '발송 대상이 없습니다', s: 'STEP 4 에서 보낼 사람을 먼저 선택하세요.', blocked: true }
       : x.drafted === 0
         ? { t: '지금 할 일', m: '키워드를 고르고 문구를 받아 보세요', s: '아래 문구 스튜디오에서 키워드 몇 개만 누르면 광고 문구 수십 개를 뽑아 줍니다. 마음에 드는 것을 찜하면 그 방향으로 메일이 만들어집니다.' }
@@ -355,11 +359,15 @@ function draw(loading) {
       <div class="num">▤</div>
       <div><div class="lb">전체 보기</div><div class="sb">7단계를 한 화면에</div></div>
     </div>` + steps.map(s => {
-    const done = stepDone(s.n, x);
-    const isNext = !done && steps.filter(y => y.n < s.n).every(y => stepDone(y.n, x));
+    const stt = stepState(s.n, x);
+    const done = stt === 'done';
+    const skipped = stt === 'skip';
+    const isNext = stt === 'todo' && steps.filter(y => y.n < s.n).every(y => stepDone(y.n, x));
     return `
-    <div class="step ${viewStep === s.n ? 'active' : ''} ${done ? 'done' : ''} ${isNext ? 'ready' : ''}" data-n="${s.n}">
-      <div class="num">${done ? '✓' : s.n}</div>
+    <div class="step ${viewStep === s.n ? 'active' : ''} ${done ? 'done' : ''} ${isNext ? 'ready' : ''}" data-n="${s.n}"
+      ${skipped ? 'title="건너뛰고 지나갔습니다 — 이 단계를 실제로 수행하지는 않았습니다"' : ''}>
+      <div class="num" ${skipped ? 'style="border-color:var(--warn-line);background:var(--warn-bg);color:var(--warn)"' : ''}>
+        ${done ? '✓' : skipped ? '⤼' : s.n}</div>
       <div>
         <div class="lb">${esc(s.label)}
           ${s.hitl ? '<span class="hitl">HUMAN</span>' : ''}
@@ -2239,8 +2247,12 @@ function flowDiagram() {
     const r = SC.results[n];
     if (SC.current === n) return 'run';
     if (r?.status === 'fail') return 'fail';
-    if (r?.status === 'ok') return 'ok';
-    return stepDone(n, x) ? 'done' : 'idle';
+    // 지난 실행 기록보다 '지금 데이터' 를 우선한다.
+    // 어제 성공했어도 명함을 새로 넣었으면 지금은 안 된 상태다.
+    const now = stepState(n, x);
+    if (now === 'done') return 'ok';
+    if (now === 'skip') return 'skip';
+    return r?.status === 'ok' ? 'stale' : 'idle';
   };
 
   const node = s => {
@@ -2249,10 +2261,13 @@ function flowDiagram() {
     return `
       <div class="fnode ${st}" data-n="${s.n}" title="${esc(s.comp)}">
         <div class="fn-top">
-          <span class="fn-num">${st === 'ok' || st === 'done' ? '✓' : st === 'fail' ? '✕' : s.n}</span>
+          <span class="fn-num">${st === 'ok' || st === 'done' ? '✓'
+            : st === 'fail' ? '✕' : st === 'skip' ? '⤼' : st === 'stale' ? '↻' : s.n}</span>
           <span class="fn-lb">${esc(s.label)}</span>
         </div>
         <div class="fn-comp">${esc(s.comp)}</div>
+        ${st === 'skip' ? '<div class="fn-msg" style="color:var(--warn)">건너뜀 — 수행하지 않았습니다</div>' : ''}
+        ${st === 'stale' ? '<div class="fn-msg" style="color:var(--tx3)">지난 실행 기록 · 지금 데이터로는 미완료</div>' : ''}
         ${r ? `<div class="fn-msg">${esc(r.msg)}${r.ms ? ` · ${(r.ms / 1000).toFixed(1)}s` : ''}</div>` : ''}
       </div>`;
   };
