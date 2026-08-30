@@ -66,8 +66,13 @@ def get(url: str, st: dict | None = None) -> dict | None:
     return rec
 
 
-def put(url: str, site: dict, signals: dict) -> None:
-    """분석 결과를 보관한다. 같은 URL 은 덮어쓴다."""
+def put(url: str, site: dict, signals: dict, segment_id: str | None = None,
+        company: str | None = None) -> None:
+    """분석 결과를 보관한다. 같은 URL 은 덮어쓴다.
+
+    고객군·회사명도 같이 남긴다. 나중에 같은 업종의 다른 회사가 들어왔을 때
+    참고자료(프록시)로 꺼내 쓰기 위해서다.
+    """
     key = norm_url(url)
     if not key:
         return
@@ -79,6 +84,8 @@ def put(url: str, site: dict, signals: dict) -> None:
             "fetch": {"ok": site.get("ok"), "reason": site.get("reason"),
                       "chars": len(site.get("text") or "")},
             "signals": signals,
+            "segmentId": segment_id,
+            "company": company,
             "savedAt": time.time(),
         }
         st[KEY] = profiles
@@ -118,3 +125,45 @@ def summary(st: dict | None = None) -> dict:
         })
     items.sort(key=lambda x: x["ageHours"])
     return {"count": len(items), "items": items}
+
+
+def proxy_for(segment_id: str | None, exclude_url: str | None = None,
+              st: dict | None = None) -> dict | None:
+    """같은 고객군의 다른 회사에서 이미 분석해 둔 근거를 참고자료로 꺼낸다.
+
+    그 회사 홈페이지를 못 읽었을 때, 업종 표준값(일반론)보다는
+    **같은 업종 실제 회사에서 확인된 사실**이 한 단계 더 구체적이다.
+
+    다만 이것도 그 회사에서 확인한 것이 아니다. 그래서
+      - kind='proxy' 로 표시해 화면이 ✧(추정)으로 구분하고
+      - 어느 회사에서 가져온 것인지 note 에 남긴다
+      - 문안에서는 "이런 시설은 보통" 수준으로만 쓰이도록 근거 문구를 그대로 넘긴다
+    """
+    if not segment_id:
+        return None
+    ex = norm_url(exclude_url)
+    best, best_age = None, None
+    for key, rec in _all(st).items():
+        if key == ex or rec.get("segmentId") != segment_id:
+            continue
+        facts = ((rec.get("signals") or {}).get("facts")) or []
+        if not facts:
+            continue
+        age = time.time() - float(rec.get("savedAt") or 0)
+        if best_age is None or age < best_age:
+            best, best_age = rec, age
+    if not best:
+        return None
+
+    src = best.get("company") or best.get("url") or "같은 업종의 다른 회사"
+    facts = ((best.get("signals") or {}).get("facts")) or []
+    return {
+        "facts": facts,
+        "building_signals": (best.get("signals") or {}).get("building_signals") or {},
+        "confidence": "low",
+        "kind": "proxy",
+        "proxyFrom": src,
+        "note": (f"이 회사 홈페이지를 읽지 못해 같은 업종({segment_id})의 "
+                 f"'{src}' 분석을 참고자료로 씁니다. "
+                 "그 회사에서 확인한 내용이 아니므로 검토에서 반드시 확인하세요."),
+    }

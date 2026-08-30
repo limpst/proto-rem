@@ -41,3 +41,6 @@ test-results/
 # 스모크 테스트용 임시 페이로드
 .smoke/
 public/app.js.bak
+
+# 로컬 검증용 임시 DB
+.t/

@@ -50,8 +50,11 @@ STEPS = [
     {"n": 1, "id": "ingest", "label": "명함 수집", "hitl": False, "desc": "리멤버/CSV에서 명함을 가져온다"},
     {"n": 2, "id": "resolve", "label": "발신·발송모드", "hitl": True,
      "desc": "발신은 에이톰엔지니어링 고정. 발신자 역할과 1:1 / 1:N 을 사람이 선택한다"},
-    {"n": 3, "id": "enrich", "label": "홈페이지 분석", "hitl": False,
-     "desc": "source(자사)·target(고객) 홈페이지를 읽어 근거를 뽑고, 그 근거로 프롬프트를 조립한다"},
+    # 3단계는 선택이다. 저장된 분석이 있으면 건너뛰어도 5단계가 돌아간다.
+    # 근거가 없으면 업종 표준값으로 대체되므로 파이프라인이 끊기지 않는다.
+    {"n": 3, "id": "enrich", "label": "홈페이지 분석", "hitl": False, "optional": True,
+     "desc": "선택 단계. 회사 홈페이지를 읽어 그 회사에만 해당하는 근거를 뽑습니다. "
+             "건너뛰면 저장된 분석이나 업종 표준값을 씁니다"},
     {"n": 4, "id": "segment", "label": "고객군 선택", "hitl": True,
      "desc": "고객군 자동 분류 → 사람이 발송 대상 확정"},
     {"n": 5, "id": "generate", "label": "문구·카피 생성", "hitl": False,
@@ -131,7 +134,12 @@ def _job_run(jid: str, fn):
     def wrap():
         try:
             fn(jid)
-            _job_set(jid, status="cancelled" if _job_cancelled(jid) else "done", current="")
+            if _job_cancelled(jid):
+                # current 에는 작업이 남긴 "남은 N건은 표준값으로 채웠습니다" 가 들어 있다.
+                # 여기서 비우면 화면이 왜 멈췄는지 말해 줄 문장을 잃는다.
+                _job_set(jid, status="cancelled")
+            else:
+                _job_set(jid, status="done", current="")
         except Exception as e:
             L.log("error", "job", f"{jid} 실패 — {e}")
             _job_set(jid, status="failed", error=f"{type(e).__name__}: {e}")
@@ -451,31 +459,41 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
     # 저장된 분석이 있으면 그것으로 채우고 STEP 3 을 통과시킨다.
     # 매번 홈페이지를 다시 읽을 이유가 없다는 요구를 그대로 구현한 것.
     if path == "/api/enrich-skip" and method == "POST":
-        used = missing = 0
+        used = missing = proxied = 0
 
         def apply(st):
-            nonlocal used, missing
+            nonlocal used, missing, proxied
             for c in st["cards"]:
                 if c.get("excluded") or c.get("segmentId") == "internal":
                     continue
                 if (c.get("signals") or {}).get("facts"):
                     used += 1
                     continue
+                # ① 그 회사의 최근 분석 → ② 같은 업종 다른 회사(프록시) → ③ 업종 표준값
                 saved = SITE.get(c.get("siteUrl"), st)
                 if saved:
                     c["siteFetch"] = {**(saved.get("fetch") or {}), "fromStore": True}
                     c["signals"] = saved.get("signals") or {}
                     c["status"] = "ENRICHED"
                     used += 1
-                else:
-                    # 보관본도 없으면 업종 표준값으로 채운다. 여기서 멈추지 않는다.
-                    c["signals"] = SF.signals_for(c.get("segmentId"), "저장된 분석 없음 (건너뛰기)")
+                    continue
+
+                px = SITE.proxy_for(c.get("segmentId"), c.get("siteUrl"), st)
+                if px:
+                    c["siteFetch"] = {"ok": False, "reason": "proxy", "chars": 0, "fromStore": True}
+                    c["signals"] = px
                     c["status"] = "ENRICHED"
-                    missing += 1
+                    proxied += 1
+                    continue
+
+                c["signals"] = SF.signals_for(c.get("segmentId"), "저장된 분석·유사업종 자료 없음")
+                c["status"] = "ENRICHED"
+                missing += 1
             st["step"] = 3
         st2 = store.update(apply)
-        L.log("ok", "enrich", f"리서치 건너뜀 — 보관본 {used}건 · 업종 표준값 {missing}건")
-        return 200, full_state(st2, skipped={"used": used, "fallback": missing})
+        L.log("ok", "enrich",
+              f"리서치 건너뜀 — 보관본 {used}건 · 유사업종 {proxied}건 · 업종 표준값 {missing}건")
+        return 200, full_state(st2, skipped={"used": used, "proxy": proxied, "fallback": missing})
 
     # --- 시나리오 실행 기록 -------------------------------------------------
     # 화면 메모리에만 두면 새로고침에 사라진다. 어제 돌린 결과를 오늘 다시
@@ -559,6 +577,10 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
             if pre:
                 L.log("info", "enrich", f"표준값을 고르기 위해 {pre}건을 키워드로 미리 분류했습니다")
                 store.save(cur)
+                # targets 는 이 작업이 시작될 때 떠 둔 스냅샷이라 방금 채운 고객군이 없다.
+                # 그대로 두면 SF.signals_for(None) 이 되어 표준값이 빈 목록으로 나온다.
+                fresh = {c["id"]: c for c in cur["cards"]}
+                targets[:] = [fresh.get(t["id"], t) for t in targets]
             if not cur.get("sourceProfile"):
                 cur["sourceProfile"] = enrich.build_source_profile()
                 store.save(cur)
@@ -629,7 +651,8 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
                         t.get("segmentId"),
                         f"홈페이지 본문 {len(site.get('text') or '')}자 (자바스크립트 렌더링 등)")
                     # 이번에 분석한 결과를 보관한다. 다음 실행에서 같은 회사는 다시 읽지 않는다.
-                    SITE.put(t.get("siteUrl"), site, signals)
+                    SITE.put(t.get("siteUrl"), site, signals,
+                         segment_id=t.get("segmentId"), company=t.get("company"))
                     cur = store.load()
                     c = _card(cur, t["id"])
                     if c is not None:
@@ -654,7 +677,9 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
                     except Exception as e:
                         # AI 가 실패해도 파이프라인은 멈추지 않는다. 업종 일반 특성으로 대체한다.
                         _job_fail_item(job_id, t.get("company") or t.get("name"), e)
-                        signals = SF.signals_for(t.get("segmentId"), f"{type(e).__name__}")
+                        # 표준값보다 같은 업종 실제 회사의 분석이 한 단계 더 구체적이다.
+                    signals = (SITE.proxy_for(t.get("segmentId"), t.get("siteUrl"))
+                               or SF.signals_for(t.get("segmentId"), f"{type(e).__name__}"))
                     if url_key:
                         seen_signals[sig_key] = signals
 
@@ -1006,6 +1031,11 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
                             continue
                         c["message"] = ({**tpl, "mode": "1:N"} if tpl.get("error")
                                         else generate.render_template(tpl, c, channel))
+                        # render_template 은 새 dict 를 만든다. 왜 대체됐는지가 여기서 사라지면
+                        # 검토 화면이 "AI 가 쓴 것" 과 구분할 근거를 잃는다.
+                        for k in ("kind", "fallbackFrom"):
+                            if tpl.get(k):
+                                c["message"][k] = tpl[k]
                         c["message"].setdefault("reviewStatus", "PENDING")
                         c["status"] = "HELD" if c["message"].get("error") else "DRAFTED"
                     cur["step"] = 5

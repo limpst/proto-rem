@@ -236,7 +236,9 @@ function stepDone(n, x) {
     false,
     x.total > 0,                       // 1 수집
     Boolean(S.personaId && S.mode),    // 2 발신·모드
-    x.facts > 0,                       // 3 리서치
+    // 3은 선택 단계다. 근거가 없어도 5단계가 업종 표준값으로 돌아가므로
+    // 여기서 '미완료'로 잡아 다음 단계를 막지 않는다.
+    x.facts > 0 || x.selected > 0 || x.drafted > 0,   // 3 리서치 (선택)
     x.selected > 0,                    // 4 대상 확정
     x.drafted > 0,                     // 5 생성
     x.approved > 0,                    // 6 승인
@@ -346,6 +348,7 @@ function draw(loading) {
       <div>
         <div class="lb">${esc(s.label)}
           ${s.hitl ? '<span class="hitl">HUMAN</span>' : ''}
+          ${s.optional ? '<span class="hitl" style="background:#16233a;border-color:#26406b;color:#9dc0ff">선택</span>' : ''}
           ${isNext ? '<span class="dot"></span>' : ''}</div>
         <div class="sb">${esc(SHORT[s.id] ?? '')}</div>
       </div>
@@ -1469,8 +1472,8 @@ function bind() {
       const r = await api('/api/enrich-skip', {});
       if (r.error) { toast(r.error, true); return null; }
       const k = r.skipped ?? {};
-      toast(`리서치를 건너뛰었습니다.
-저장된 분석 ${k.used ?? 0}건 · 업종 표준값 ${k.fallback ?? 0}건`);
+      toast('리서치를 건너뛰었습니다.\n'
+        + `저장된 분석 ${k.used ?? 0}건 · 유사업종 참고 ${k.proxy ?? 0}건 · 업종 표준값 ${k.fallback ?? 0}건`);
       return r;
     },
     segment: () => api('/api/segment', {}),
@@ -2069,10 +2072,18 @@ const SC_RUN = {
   },
 
   async enrich() {
-    // 이미 근거가 다 있으면 다시 읽지 않는다. 회사 홈페이지는 매번 바뀌지 않는다.
+    // 3단계는 선택이다. 시나리오는 빠른 경로를 기본으로 쓴다.
+    // 저장된 분석이 있으면 그것을, 없으면 업종 표준값을 채우고 즉시 넘어간다.
+    // 홈페이지를 새로 읽고 싶으면 화면에서 [홈페이지 새로 읽기] 를 누르면 된다.
     const before = stats();
     if (before.facts >= before.usable.length && before.usable.length > 0) {
-      return `근거 ${before.facts}건 (저장된 분석 사용 — 리서치 생략)`;
+      return `근거 ${before.facts}건 (저장된 분석 사용 — 생략)`;
+    }
+    const sk = await api('/api/enrich-skip', {});
+    if (!sk.error) {
+      adopt(sk);
+      const k = sk.skipped ?? {};
+      return `저장된 분석 ${k.used ?? 0}건 · 업종 표준값 ${k.fallback ?? 0}건 (선택 단계 — 건너뜀)`;
     }
     const j = await runJob('/api/enrich', {}, 'STEP 3 · 홈페이지 리서치');
     const x = stats();
