@@ -480,6 +480,116 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.92em}
 .fnode.skip .fn-num{border-color:var(--warn-line);background:var(--warn-bg);color:var(--warn)}
 .fnode.stale{border-style:dashed;opacity:.72}
 .fnode.stale .fn-num{border-style:dashed;color:var(--tx3)}
+
+/* ══════════════════════════════════════════════════════════════════
+   정교화 레이어 — 화면을 실제로 찍어서 보고 고친 것들
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── ① 한국어 줄바꿈 ───────────────────────────────────────────────
+   기본 규칙은 영어 기준이라 "메일을 내보내 / 기 전에" 처럼 어절 중간이 끊긴다.
+   한국어는 어절(띄어쓰기) 단위로 접어야 읽힌다. */
+body{word-break:keep-all;overflow-wrap:anywhere}
+.head h2,.todo .m,.brand h1{text-wrap:balance}
+.head .desc,.todo .s{max-width:66ch}
+/* 코드·주소는 어절이 없으므로 예외로 둔다 */
+pre,code,.lg .mg,input,textarea{word-break:break-word}
+
+/* ── ② 여백 리듬 ───────────────────────────────────────────────────
+   지금은 패널 사이 간격이 모두 같아 어디까지가 한 덩어리인지 보이지 않는다.
+   덩어리 안은 좁게, 덩어리 사이는 넓게 — 두 단계면 충분하다. */
+:root{--sp-in:14px;--sp-out:26px}
+main>.panel+.panel,main>details.panel+.panel,
+main>.panel+details.panel,main>details.panel+details.panel{margin-top:var(--sp-in)}
+main>.todo{margin-bottom:var(--sp-out)}
+main>.flow{margin-bottom:var(--sp-out)}
+
+/* ── ③ 색의 규율 — 초록은 '사람이 확인한 것' 에만 ──────────────────
+   지금은 사이드바 7단계가 전부 초록 체크라 "다 끝났다"고 말한다.
+   실제로는 작업 중인데도 그렇다. 완료는 조용히, 지금 할 일만 눈에 띄게. */
+.step.done .num{
+  border-color:var(--line2);background:var(--s1);color:#586275;
+  box-shadow:none;font-weight:600;
+}
+.step.done .lb{color:var(--tx2);font-weight:500}
+.step.done .sb{color:#4a5364}
+/* 다음에 할 단계는 확실히 도드라지게 */
+.step.ready{background:rgba(109,139,255,.06)}
+.step.ready .lb{color:#dbe6ff}
+.step.ready .num{box-shadow:0 0 0 4px rgba(109,139,255,.16)}
+
+/* 처리 흐름도도 같은 규율. 방금 돌린 결과(ok/fail)만 색을 갖는다. */
+.fnode.done{border-color:var(--line);background:var(--s2)}
+.fnode.done .fn-num{border-color:var(--line2);background:var(--s1);color:#586275}
+.fnode.done .fn-msg{color:var(--tx3)}
+
+/* ── ④ 같은 정보를 세 번 보여 주지 않는다 ─────────────────────────
+   통계 화면에는 8칸 지표가 이미 타일로 다시 나온다. 위의 띠는 지운다.
+   설정 화면에는 파이프라인 지표 자체가 무관하다. */
+body[data-view="stats"] .flow,
+body[data-view="settings"] .flow{display:none}
+/* 통계에는 아래에 더 정확한 퍼널이 있다. 위의 흐름도는 같은 말을 두 번 하는 것이다. */
+body[data-view="stats"] #flowdiag-slot,
+body[data-view="settings"] #flowdiag-slot{display:none}
+
+/* ── ⑤ 통계 타일 — 열 개가 화면 절반을 먹지 않게 ─────────────────── */
+body[data-view="stats"] .panel>div[style*="minmax(112px"]{
+  grid-template-columns:repeat(auto-fill,minmax(96px,1fr))!important;gap:7px!important;
+}
+body[data-view="stats"] .panel>div[style*="minmax(112px"]>.panel{
+  padding:10px 12px!important;box-shadow:none;background:var(--s3);
+}
+body[data-view="stats"] .panel>div[style*="minmax(112px"] div[style*="font-size:23px"]{
+  font-size:19px!important;
+}
+
+/* ── ⑥ 긴 표 — 머리글이 패널 안에서 따라오게 ──────────────────────
+   명함이 72장이면 스크롤 중에 어느 칸이 무엇인지 알 수 없다.
+   표 자체를 스크롤 영역으로 만들어야 sticky 머리글이 뜻을 갖는다. */
+.tw{max-height:min(62vh,680px);overflow:auto}
+.tw table{min-width:720px}
+th{background:linear-gradient(180deg,#121620,#10131a);box-shadow:0 1px 0 var(--line)}
+/* 선택된 줄은 눈에 남아야 한다 */
+tbody tr:has(input.pick:checked) td{background:rgba(109,139,255,.07)}
+tbody tr:has(input.pick:checked) td:first-child{box-shadow:inset 2px 0 0 var(--br)}
+
+/* 숫자 칸은 오른쪽 정렬 + 자릿수 고정 — 세로로 비교되게 */
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+
+/* ── ⑦ 막대 — 트랙과 채움이 확실히 갈리게 ────────────────────────── */
+.barwrap{background:#0b0e14;box-shadow:inset 0 0 0 1px var(--line)}
+
+/* ── ⑧ 툴팁이 가리키는 것을 덮지 않게 ─────────────────────────────
+   사이드바 항목에 올리면 툴팁이 메뉴를 덮어 무엇을 고르는지 안 보였다. */
+.tip{box-shadow:var(--sh-lg),0 0 0 1px rgba(0,0,0,.5)}
+
+/* ── ⑨ 누를 수 있는 것은 손가락으로도 누를 수 있게 ────────────────
+   xs 버튼이 표 안에 여럿 있는데 높이가 20px 남짓이라 빗나가기 쉽다. */
+button.xs{min-height:24px;padding:4px 10px}
+button.sm{min-height:30px}
+button{min-height:34px}
+input[type=checkbox]{width:17px;height:17px}
+
+/* ── ⑩ 비활성 버튼도 왜 못 누르는지 보이게 ────────────────────────
+   지금은 30% 투명도라 글자가 거의 안 읽힌다. 읽히되 눌리지 않아 보여야 한다. */
+button:disabled{opacity:.55;filter:grayscale(.55) brightness(.8)}
+button.ghost:disabled{background:transparent;border-style:dashed}
+
+/* ── ⑪ 입력칸 포커스 — 어디에 타이핑 중인지 ──────────────────────── */
+select:focus,.inp:focus,.site-in:focus,.msg input:focus,.msg textarea:focus{
+  border-color:var(--br);box-shadow:0 0 0 3px rgba(109,139,255,.16);
+}
+
+/* ── ⑫ 화면이 넓을 때 본문이 끝없이 늘어나지 않게 ────────────────── */
+@media (min-width:1600px){ main{max-width:1320px} }
+@media (min-width:1100px) and (max-width:1400px){ .flow{grid-template-columns:repeat(4,1fr)} }
+
+/* ── ⑬ 인쇄 — 회의 자료로 뽑을 때 ─────────────────────────────────── */
+@media print{
+  aside,.console,.tip,button{display:none!important}
+  body{background:#fff;color:#111}
+  .panel,.msg,.todo{border-color:#ccc;background:#fff;box-shadow:none;break-inside:avoid}
+  .tw{max-height:none;overflow:visible}
+}
 </style>
 </head>
 <body>

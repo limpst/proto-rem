@@ -362,6 +362,8 @@ function render(loading) {
 
 function draw(loading) {
   if (!S) return;
+  // 같은 정보를 화면마다 세 번씩 보여 주지 않도록, 지금 화면을 CSS 에 알린다.
+  document.body.dataset.view = String(viewStep);
   if (S.error && !S.steps) {
     $('#view').innerHTML = `<div class="panel"><div class="cap">서버 오류</div><pre>${esc(S.error)}</pre></div>`;
     return;
@@ -403,7 +405,9 @@ function draw(loading) {
     const isNext = stt === 'todo' && steps.filter(y => y.n < s.n).every(y => stepDone(y.n, x));
     return `
     <div class="step ${viewStep === s.n ? 'active' : ''} ${done ? 'done' : ''} ${isNext ? 'ready' : ''}" data-n="${s.n}"
-      ${skipped ? 'title="건너뛰고 지나갔습니다 — 이 단계를 실제로 수행하지는 않았습니다"' : ''}>
+      title="${skipped ? '건너뛰고 지나갔습니다 — 이 단계를 실제로 수행하지는 않았습니다. '
+        : done ? '끝난 단계입니다. 다시 눌러 결과를 확인하거나 고칠 수 있습니다. '
+        : isNext ? '지금 할 차례입니다. ' : ''}${esc(s.desc || SHORT[s.id] || '')}">
       <div class="num" ${skipped ? 'style="border-color:var(--warn-line);background:var(--warn-bg);color:var(--warn)"' : ''}>
         ${done ? '✓' : skipped ? '⤼' : s.n}</div>
       <div>
@@ -1710,9 +1714,20 @@ function showTip(el) {
   tipBox.hidden = false;
   const r = el.getBoundingClientRect();
   const w = tipBox.offsetWidth, h = tipBox.offsetHeight;
-  const left = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), innerWidth - w - 8);
-  let top = r.top - h - 8;
-  if (top < 8) top = Math.min(r.bottom + 8, innerHeight - h - 8);
+  let left, top;
+  // 사이드바 항목은 위/아래로 띄우면 바로 그 메뉴를 덮는다. 옆으로 비켜 세운다.
+  const aside = el.closest('aside');
+  if (aside) {
+    // 항목의 오른쪽이 아니라 사이드바 바깥쪽을 기준으로 민다.
+    // 항목 기준이면 안쪽 여백만큼 사이드바에 걸쳐 경계가 지저분해진다.
+    const ar = aside.getBoundingClientRect();
+    left = Math.min(ar.right + 12, innerWidth - w - 8);
+    top = Math.min(Math.max(8, r.top - 4), innerHeight - h - 8);
+  } else {
+    left = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), innerWidth - w - 8);
+    top = r.top - h - 8;
+    if (top < 8) top = Math.min(r.bottom + 8, innerHeight - h - 8);
+  }
   tipBox.style.left = `${left}px`;
   tipBox.style.top = `${Math.max(8, top)}px`;
 }
@@ -1763,21 +1778,30 @@ const ctxNow = () => ({
 
 const BAR_H = 'height:9px;border-radius:4px';
 
-function bar(n, max, color = 'var(--accent)') {
+function bar(n, max, color = 'var(--br)') {
   const w = max > 0 ? Math.max(n > 0 ? 3 : 0, Math.round((n / max) * 100)) : 0;
-  return `<div style="background:var(--sunk);${BAR_H};overflow:hidden;min-width:60px">
+  return `<div class="barwrap" style="background:var(--sunk);${BAR_H};overflow:hidden;min-width:60px">
     <div style="width:${w}%;background:${color};${BAR_H}"></div></div>`;
 }
 
 /** 이름 · 막대 · 숫자 한 줄. 표로 짜서 숫자 자리가 흔들리지 않게 한다. */
-function barRows(rows, { color = 'var(--accent)', unit = '건', note = true } = {}) {
+function barRows(rows, { color = 'var(--br)', unit = '건', note = true } = {}) {
   const max = Math.max(1, ...rows.map(r => r.n));
-  return `<table style="width:100%"><tbody>
+  // 설명을 별도 행으로 빼면 줄 수가 두 배가 되어 한눈에 안 들어온다.
+  // 이름 아래에 붙여 한 항목이 한 줄로 읽히게 한다.
+  return `<table style="width:100%;border-collapse:separate;border-spacing:0 2px"><tbody>
     ${rows.map(r => `<tr>
-      <td style="padding:5px 10px 5px 0;white-space:nowrap;font-size:12.5px" title="${esc(r.note ?? r.key)}">${esc(r.key)}</td>
-      <td style="padding:5px 10px;width:100%">${bar(r.n, max, r.color || color)}</td>
-      <td style="padding:5px 0;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:600">${r.n}<span class="muted" style="font-weight:400;font-size:11px">${unit}</span></td>
-    </tr>${note && r.note ? `<tr><td colspan="3" class="muted" style="padding:0 0 6px;font-size:11px">${esc(r.note)}</td></tr>` : ''}`).join('')}
+      <td style="padding:6px 14px 6px 0;vertical-align:middle;width:1%;white-space:nowrap">
+        <div style="font-size:12.5px;font-weight:600;letter-spacing:-.2px">${esc(r.key)}</div>
+        ${note && r.note ? `<div class="muted" style="font-size:10.5px;margin-top:1px;font-weight:400">${esc(r.note)}</div>` : ''}
+      </td>
+      <td style="padding:6px 0;vertical-align:middle;width:100%">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="flex:1;min-width:80px">${bar(r.n, max, r.color || color)}</div>
+          <div style="white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:700;font-size:13px;min-width:46px;text-align:right">${r.n}<span class="muted" style="font-weight:400;font-size:10.5px;margin-left:1px">${unit}</span></div>
+        </div>
+      </td>
+    </tr>`).join('')}
   </tbody></table>`;
 }
 
@@ -1792,19 +1816,23 @@ function tile(label, n, tone, tip) {
 function statsView() {
   if (!STATS) return '<div class="panel muted">통계를 불러오는 중…</div>';
   const t = STATS.totals || {};
+  // 타일과 아래 퍼널이 다른 기준으로 세면 같은 화면에서 '초안'이 11 과 6 으로
+  // 둘 다 나온다. 어느 쪽이 맞는지 알 수 없으므로 기준을 퍼널(대상 안)로 맞춘다.
+  const fn = Object.fromEntries((STATS.funnel || []).map(f => [f.key, f.n]));
   const seg = STATS.segments || [];
   const maxT = Math.max(1, ...seg.map(r => r.target));
 
   return `
   <div class="panel">
-    <div class="cap">지금 상태</div>
+    <div class="cap">지금 상태
+      <span class="muted" style="font-weight:400">— 모두 <b>발송 대상</b> 안에서 센 수입니다</span></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:9px">
       ${tile('명함', t.cards, '', '가져온 명함 전체입니다.')}
       ${tile('발송 대상', t.usable, '', '자사·제외를 뺀 실제 후보입니다.')}
-      ${tile('선택', t.selected, '', '사람이 고른 발송 대상입니다.')}
-      ${tile('초안', t.drafted, '', '문안이 만들어진 건입니다.')}
-      ${tile('승인', t.approved, t.approved ? 'ok' : '', '사람이 승인한 건. 이것만 발송됩니다.')}
-      ${tile('발송', t.sent, t.sent ? 'ok' : '', '실제로 나간 건입니다.')}
+      ${tile('선택', fn['선택'] ?? t.selected, '', '사람이 고른 발송 대상입니다.')}
+      ${tile('초안', fn['초안'] ?? t.drafted, '', '발송 대상 중 문안이 만들어진 건입니다.')}
+      ${tile('승인', fn['승인'] ?? t.approved, (fn['승인'] ?? t.approved) ? 'ok' : '', '발송 대상 중 사람이 승인한 건. 이것만 나갑니다.')}
+      ${tile('발송', fn['발송'] ?? t.sent, (fn['발송'] ?? t.sent) ? 'ok' : '', '실제로 나간 건입니다.')}
       ${tile('보류', t.held, t.held ? 'warn' : '', '근거가 없어 문안을 만들지 않은 건입니다.')}
       ${tile('반려', t.rejected, t.rejected ? 'warn' : '', '사람이 반려한 건입니다.')}
       ${tile('주소 없음', t.noEmail, t.noEmail ? 'bad' : '', '수신 이메일이 없어 발송이 막히는 건입니다. STEP 7 이력에서 [수정]으로 넣으세요.')}
@@ -1866,7 +1894,7 @@ function statsView() {
         ? barRows(STATS.status.map(v => ({
             key: v.key, n: v.n,
             color: v.key === 'SENT' ? 'var(--ok)' : v.key === 'SEND_FAILED' ? 'var(--bad)'
-              : v.key === 'NO_EMAIL' ? 'var(--warn)' : 'var(--accent)',
+              : v.key === 'NO_EMAIL' ? 'var(--warn)' : 'var(--br)',
           })), { note: false })
         : '<div class="muted">아직 없습니다.</div>'}
     </div>
