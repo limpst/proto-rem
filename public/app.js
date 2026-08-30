@@ -321,8 +321,16 @@ function draw(loading) {
   }
   const x = stats();
 
-  /* 좌측 레일 — 전체 보기 + 7단계. 어느 화면에서도 항상 그린다. */
+  /* 좌측 레일 — 관리자 설정 · 전체 보기 · 7단계. 어느 화면에서도 항상 그린다.
+     설정을 맨 위에 둔다. API 키나 발송 모드가 안 맞으면 아래 단계가 전부 막히므로,
+     먼저 확인해야 할 것이 먼저 보이는 편이 낫다. */
   $('#rail').innerHTML = `
+    <div class="step ${viewStep === 'settings' ? 'active' : ''}" data-n="settings"
+      style="margin-bottom:10px;border-bottom:1px solid var(--line);padding-bottom:13px"
+      title="메일 계정·AI 키·발송 안전장치 같은 환경 설정을 여기서 직접 고칩니다.">
+      <div class="num">⚙</div>
+      <div><div class="lb">관리자 설정</div><div class="sb">메일 · AI 키 · 안전장치</div></div>
+    </div>
     <div class="step ${viewStep === 'all' ? 'active' : ''}" data-n="all"
       title="7단계를 한 화면에 세로로 펼쳐 봅니다. 전체 흐름을 훑거나 여러 단계를 오가며 작업할 때 씁니다.">
       <div class="num">▤</div>
@@ -340,13 +348,7 @@ function draw(loading) {
         <div class="sb">${esc(SHORT[s.id] ?? '')}</div>
       </div>
     </div>`;
-  }).join('') + `
-    <div class="step ${viewStep === 'settings' ? 'active' : ''}" data-n="settings"
-      style="margin-top:10px;border-top:1px solid var(--line);padding-top:13px"
-      title="메일 계정·AI 키·발송 안전장치 같은 환경 설정을 여기서 직접 고칩니다.">
-      <div class="num">⚙</div>
-      <div><div class="lb">관리자 설정</div><div class="sb">메일 · AI 키 · 안전장치</div></div>
-    </div>`;
+  }).join('');
 
   const b = S.backend ?? {};
   // 백엔드가 없으면 STEP 3·5 가 반드시 실패한다. 시도하기 전에 사이드바에서 먼저 보여준다.
@@ -359,11 +361,30 @@ function draw(loading) {
       ${S.smtp?.configured ? (S.smtp.dryRun ? '연습모드' : '발송가능') : '미설정'}</dd>
     <dt>서버</dt><dd>${esc(S.runtime === 'python' ? 'Python' : 'Node')} · SQLite</dd>`;
 
+  // 흐름도 — 어느 단계를 지나는지, 무슨 컴포넌트가 도는지 화면 위에 항상 보인다.
+  const fd = document.querySelector('#flowdiag-slot');
+  if (fd) fd.innerHTML = flowDiagram();
+
   $('#flow').innerHTML = [
     ['명함', x.total], ['대상', x.usable.length], ['홈페이지', x.site], ['근거', x.facts],
     ['선택', x.selected], ['초안', x.drafted], ['승인', x.approved], ['발송', x.sent],
   ].map(([k, v]) =>
     `<div class="cell ${v ? 'good' : 'zero'}"><div class="v">${v}</div><div class="k">${k}</div></div>`).join('');
+
+  if (viewStep === 'settings') {
+    $('#head').innerHTML = `
+      <div class="eyebrow">관리자 설정</div>
+      <h2>환경 설정</h2>
+      <div class="desc">메일 계정, AI 키, 발송 안전장치를 여기서 직접 고칩니다.
+        각 항목이 업무상 무엇을 바꾸는지 함께 적어 두었습니다.</div>`;
+    $('#todo').innerHTML = loading
+      ? `<div class="todo"><div class="t">진행 중</div><div class="spin" style="margin-top:8px">${esc(loading)}</div></div>` : '';
+    $('#view').innerHTML = settingsView();
+    bind();
+    // 처음 들어왔을 때만 불러온다. 불러온 뒤 한 번 더 그린다.
+    if (!SETTINGS) loadSettings().then(() => render());
+    return;
+  }
 
   if (viewStep === 'all') {
     $('#head').innerHTML = `
@@ -1180,6 +1201,8 @@ const ctxNow = () => ({
 function bind() {
   const acts = {
     ingest: () => api('/api/ingest', {}),
+    scenario: async () => { runScenario(); return null; },
+    'scenario-clear': async () => { SC.results = {}; return null; },
     'settings-reveal': async () => { await loadSettings(!settingsReveal); return null; },
     'settings-reload': async () => { Object.keys(settingsEdits).forEach(k => delete settingsEdits[k]); await loadSettings(settingsReveal); return null; },
     'settings-save': async () => {
@@ -1237,14 +1260,10 @@ function bind() {
     clearcopy: () => { pickedCopy.clear(); return api('/api/state'); },
 
     generate: async ctx => {
-      let r = await api('/api/generate', { channel: ctx.channel, batch: 1, restart: true });
-      let guard = 0;
-      while (r?.remaining > 0 && guard++ < 300) {
-        adopt(r); render(`메일 만드는 중 — ${r.remaining}건 남음`);
-        r = await api('/api/generate', { channel: ctx.channel, batch: 1 });
-        if (r?.error) break;
-      }
-      return r;
+      // 서버가 작업 번호만 주고 즉시 끝나므로, 여기서 진행률을 물어보며 기다린다.
+      // 예전에는 요청 하나가 5분 넘게 붙잡혀 브라우저가 먼저 끊었다.
+      await runJob('/api/generate', { channel: ctx.channel, restart: true }, '메일 만드는 중');
+      return null;
     },
 
     testsend: async ctx => {
@@ -1265,10 +1284,27 @@ function bind() {
     },
 
     prompt: async () => {
-      const first = (S.cards ?? []).find(c => (S.selection ?? []).includes(c.id)) ?? S.cards?.[0];
+      // 자사·제외·미분류 명함은 만들 프롬프트가 없다. 그런 걸 고르면
+      // 빈 응답이 와서 "아무 반응 없음" 으로 보인다. 쓸 수 있는 대상을 먼저 찾는다.
+      const usable = (S.cards ?? []).filter(c =>
+        !c.excluded && c.segmentId && !['internal', 'excluded', 'unclassified'].includes(c.segmentId));
+      const first = usable.find(c => (S.selection ?? []).includes(c.id)) ?? usable[0];
+      if (!first) {
+        toast([
+          '미리보기를 만들 대상이 없습니다.',
+          '',
+          'STEP 4 에서 고객군을 먼저 분류하세요.',
+          '자사·제외·미분류 명함은 문안을 만들지 않습니다.',
+        ].join('\n'), true);
+        return null;
+      }
       promptPreview = await api('/api/prompt-preview', {
-        id: first?.id, segmentId: first?.segmentId, channel: 'email',
+        id: first.id, segmentId: first.segmentId, channel: 'email',
       });
+      if (!promptPreview?.prompt) {
+        toast(promptPreview?.note || '지시문을 만들지 못했습니다.', true);
+      }
+      viewStep = 3;
       return api('/api/state');
     },
 
@@ -1311,7 +1347,10 @@ function bind() {
   });
   document.querySelectorAll('.step').forEach(el => {
     el.onclick = () => {
-      viewStep = el.dataset.n === 'all' ? 'all' : Number(el.dataset.n);
+      // 'all', 'settings' 처럼 숫자가 아닌 화면도 있다.
+      // Number() 를 그냥 태우면 NaN 이 되어 아무 화면도 못 찾고 클릭이 먹통이 된다.
+      const n = el.dataset.n;
+      viewStep = /^\d+$/.test(n) ? Number(n) : n;
       window.scrollTo({ top: 0, behavior: 'smooth' });
       render();
       if (viewStep === 5 || viewStep === 'all') loadPalette();
@@ -1474,6 +1513,14 @@ async function loadPalette() {
 }
 
 /* ── 콘솔 UI ───────────────────────────────────────────────────────── */
+/* 좌측 상단 로고 = 홈. 어느 화면에서 헤매도 한 번에 돌아올 자리가 있어야 한다. */
+function initBrand() {
+  const el = document.querySelector('#brand');
+  if (!el || el.dataset.ready) return;
+  el.dataset.ready = '1';
+  el.onclick = () => { viewStep = 'all'; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+}
+
 function initConsole() {
   const box = $('#console');
   $('#conbar').onclick = () => { box.classList.toggle('open'); LOG.paint(); };
@@ -1507,7 +1554,221 @@ function initConsole() {
 /* ── 시작 ──────────────────────────────────────────────────────────── */
 (async () => {
   initConsole();
+  initBrand();
   adopt(await api('/api/state'));
   render();
+  initBrand();   // render 가 DOM 을 갈아엎어도 로고 클릭은 살아 있어야 한다
   loadPalette();
 })();
+
+/* ═══════════════════════════════════════════════════════════════
+   시나리오 테스트 — STEP 1~7 을 순서대로 한 번에 돌린다.
+
+   왜 클라이언트에서 도는가:
+     서버가 7단계를 한 요청으로 처리하면 응답까지 수 분이 걸려
+     브라우저가 먼저 끊는다(실제로 그렇게 여러 번 실패했다).
+     단계마다 따로 호출하면 어디까지 갔는지 화면에 즉시 보이고,
+     실패해도 그 단계에서 멈춰 원인을 그대로 보여줄 수 있다.
+
+   안전: 7단계는 항상 dry-run(큐 적재)이다. 이 버튼으로는 실제 메일이 나가지 않는다.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 오래 걸리는 단계는 서버가 작업 번호만 주고 바로 끝난다.
+   여기서 진행률을 물어보며 기다린다. 요청 하나를 5분씩 붙잡지 않으므로
+   브라우저가 먼저 끊는 일이 없다. */
+async function runJob(startPath, startBody, label) {
+  const start = await api(startPath, startBody);
+  if (start.error) throw new Error(start.error);
+  if (!start.jobId) { adopt(start); return start; }   // 예전 방식(동기) 응답도 받아 준다
+
+  const total = start.total ?? 0;
+  for (let i = 0; i < 6000; i++) {                    // 최대 약 3시간
+    await new Promise(r => setTimeout(r, 1500));
+    const j = await (await fetch(`/api/job?id=${encodeURIComponent(start.jobId)}`)).json();
+    if (j.error) throw new Error(j.error);
+    if (j.status === 'failed') throw new Error(j.error || '작업이 실패했습니다.');
+    const done = j.done ?? 0;
+    render(`${label} — ${done}/${total || '?'}${j.current ? ` · ${j.current}` : ''}`);
+    if (j.status === 'done') { adopt(j); return j; }
+  }
+  throw new Error('작업이 너무 오래 걸립니다.');
+}
+
+const SC = {
+  running: false,
+  current: null,
+  results: {},          // { [n]: {status:'ok'|'fail'|'skip', msg, ms} }
+  startedAt: null,
+};
+
+const SC_STEPS = [
+  { n: 1, key: 'ingest',   label: '명함 수집',    comp: '붙여넣기 파서 · UPSERT · SQLite' },
+  { n: 2, key: 'resolve',  label: '발신·홈페이지', comp: '명의/모드 · 이메일도메인 · AI추정 · 접속검증' },
+  { n: 3, key: 'enrich',   label: '홈페이지 분석', comp: '크롤 · AI 사실추출' },
+  { n: 4, key: 'segment',  label: '고객군 선택',   comp: '키워드 규칙 · AI 분류 · 대상확정' },
+  { n: 5, key: 'generate', label: '문구 생성',    comp: '프롬프트 조립 · AI · 컴플라이언스 삽입' },
+  { n: 6, key: 'review',   label: '검토·승인',    comp: '자동검증 6항목 · 사람 승인' },
+  { n: 7, key: 'deliver',  label: '발송',        comp: '큐 적재 (dry-run)' },
+];
+
+function scPaint(msg) {
+  render(msg);
+  const el = document.querySelector('#flowdiag');
+  if (el) el.scrollIntoView({ block: 'nearest' });
+}
+
+async function runScenario() {
+  if (SC.running) return;
+  SC.running = true;
+  SC.results = {};
+  SC.startedAt = Date.now();
+
+  const mark = (n, status, msg, ms) => { SC.results[n] = { status, msg, ms }; };
+  const t = () => Date.now();
+
+  try {
+    for (const s of SC_STEPS) {
+      SC.current = s.n;
+      scPaint(`STEP ${s.n} · ${s.label} 실행 중`);
+      const t0 = t();
+      try {
+        const msg = await SC_RUN[s.key]();
+        mark(s.n, 'ok', msg, t() - t0);
+      } catch (e) {
+        mark(s.n, 'fail', String(e.message ?? e), t() - t0);
+        SC.current = null;
+        SC.running = false;
+        scPaint();
+        toast(`STEP ${s.n} (${s.label}) 에서 멈췄습니다.\n\n${e.message ?? e}`, true);
+        return;
+      }
+    }
+    SC.current = null;
+    SC.running = false;
+    scPaint();
+    const total = ((Date.now() - SC.startedAt) / 1000).toFixed(0);
+    toast(`1~7단계 전부 통과했습니다. (${total}초)\n실제 메일은 나가지 않았습니다 — 큐 적재까지만 했습니다.`);
+  } finally {
+    SC.running = false;
+    SC.current = null;
+  }
+}
+
+/** 각 단계가 실제로 하는 일. 실패하면 throw 해서 그 자리에서 멈춘다. */
+const SC_RUN = {
+  async ingest() {
+    const r = await api('/api/ingest', {});
+    if (r.error) throw new Error(r.error);
+    adopt(r);
+    const n = (r.cards ?? []).length;
+    if (!n) throw new Error('명함이 0건입니다. STEP 1 에서 먼저 가져오세요.');
+    const u = r.upsert;
+    return `${n}건` + (u ? ` (추가 ${u.inserted} · 갱신 ${u.updated} · 변화없음 ${u.unchanged})` : '');
+  },
+
+  async resolve() {
+    let r = await api('/api/mode', { mode: S.mode ?? '1:1', personaId: S.personaId ?? 'sales' });
+    if (r.error) throw new Error(r.error);
+    adopt(r);
+    r = await api('/api/resolve-sites', {});
+    if (r.error) throw new Error(r.error);
+    adopt(r);
+    const x = stats();
+    return `${S.personaId} 명의 · ${S.mode} · 홈페이지 ${x.site}/${x.usable.length}건`;
+  },
+
+  async enrich() {
+    const r = await api('/api/enrich', {});
+    if (r.error) throw new Error(r.error);
+    adopt(r);
+    const x = stats();
+    if (!x.facts) throw new Error('근거를 하나도 뽑지 못했습니다. 홈페이지 주소나 AI 백엔드를 확인하세요.');
+    return `${x.facts}개 회사에서 근거 확보`;
+  },
+
+  async segment() {
+    let r = await api('/api/segment', {});
+    if (r.error) throw new Error(r.error);
+    adopt(r);
+    // 규칙이 놓친 건 AI 로 보강 (키가 없으면 서버가 알아서 대체 백엔드를 쓴다)
+    if (stats().usable.some(c => c.segmentId === 'unclassified')) {
+      r = await api('/api/segment', { useAi: true });
+      if (!r.error) adopt(r);
+    }
+    const ids = stats().usable
+      .filter(c => c.segmentId && !['unclassified', 'internal', 'excluded'].includes(c.segmentId))
+      .map(c => c.id);
+    if (!ids.length) throw new Error('발송 가능한 고객군으로 분류된 명함이 없습니다.');
+    r = await api('/api/selection', { ids });
+    if (r.error) throw new Error(r.error);
+    adopt(r);
+    return `분류 ${stats().classified}건 · 대상 ${ids.length}건 확정`;
+  },
+
+  async generate() {
+    await runJob('/api/generate', { channel: 'email', restart: true }, 'STEP 5 · 문구 생성');
+    const x = stats();
+    if (!x.drafted) throw new Error(`초안이 만들어지지 않았습니다 (차단 ${x.held}건).`);
+    return `초안 ${x.drafted}건` + (x.held ? ` · 근거부족 차단 ${x.held}건` : '');
+  },
+
+  async review() {
+    const targets = (S.cards ?? []).filter(c => c.message && !c.message.error);
+    if (!targets.length) throw new Error('검토할 문안이 없습니다.');
+    for (const c of targets) {
+      const r = await api('/api/review', { id: c.id, action: 'approve' });
+      if (r.error) throw new Error(r.error);
+      adopt(r);
+    }
+    return `${stats().approved}건 승인`;
+  },
+
+  async deliver() {
+    // 항상 dry-run. 이 버튼으로 실제 메일이 나가면 안 된다.
+    const r = await api('/api/deliver', { confirm: false });
+    if (r.error) throw new Error(r.error);
+    adopt(r);
+    return `${stats().sent}건 큐 적재 (실제 전송 안 함)`;
+  },
+};
+
+/* ── 흐름도 — 1~7 단계와 컴포넌트, 지금 어디를 지나는지 ───────────── */
+function flowDiagram() {
+  const x = stats();
+  const stateOf = n => {
+    const r = SC.results[n];
+    if (SC.current === n) return 'run';
+    if (r?.status === 'fail') return 'fail';
+    if (r?.status === 'ok') return 'ok';
+    return stepDone(n, x) ? 'done' : 'idle';
+  };
+
+  const node = s => {
+    const st = stateOf(s.n);
+    const r = SC.results[s.n];
+    return `
+      <div class="fnode ${st}" data-n="${s.n}" title="${esc(s.comp)}">
+        <div class="fn-top">
+          <span class="fn-num">${st === 'ok' || st === 'done' ? '✓' : st === 'fail' ? '✕' : s.n}</span>
+          <span class="fn-lb">${esc(s.label)}</span>
+        </div>
+        <div class="fn-comp">${esc(s.comp)}</div>
+        ${r ? `<div class="fn-msg">${esc(r.msg)}${r.ms ? ` · ${(r.ms / 1000).toFixed(1)}s` : ''}</div>` : ''}
+      </div>`;
+  };
+
+  return `
+    <div class="panel" id="flowdiag" style="padding:16px 18px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+        <div class="cap" style="margin:0">처리 흐름 — 1~7단계가 지나가는 순서</div>
+        <button class="sm" data-act="scenario" ${SC.running ? 'disabled' : ''}
+          title="STEP 1부터 7까지 순서대로 자동 실행합니다. 어디서 막히는지 바로 보입니다. 실제 메일은 나가지 않습니다(큐 적재까지만).">
+          ${SC.running ? '실행 중…' : '시나리오 테스트 (1~7 한 번에)'}</button>
+        ${Object.keys(SC.results).length && !SC.running
+          ? `<button class="ghost sm" data-act="scenario-clear">결과 지우기</button>` : ''}
+        <span class="muted" style="font-size:11.5px">실제 발송은 하지 않습니다 — 7단계는 큐 적재까지만</span>
+      </div>
+      <div class="fchain">${SC_STEPS.map((s, i) =>
+        node(s) + (i < SC_STEPS.length - 1 ? '<div class="farrow">→</div>' : '')).join('')}</div>
+    </div>`;
+}

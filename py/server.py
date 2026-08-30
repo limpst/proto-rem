@@ -19,6 +19,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -48,6 +49,50 @@ STEPS = [
     {"n": 6, "id": "review", "label": "검토·승인", "hitl": True, "desc": "사람이 문안 수정 후 승인/반려"},
     {"n": 7, "id": "deliver", "label": "발송·추적", "hitl": False, "desc": "승인 건만 발송, 이력·응답 기록"},
 ]
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 백그라운드 작업
+#
+# 로컬 모델은 문안 한 건에 5분이 넘게 걸린다. 그동안 HTTP 응답을 붙잡고 있으면
+# 브라우저와 클라이언트가 300초에서 먼저 끊어 버린다(실측 318.9초에 끊김).
+# 그래서 오래 걸리는 단계는 즉시 작업 번호를 돌려주고, 화면이 진행률을 물어본다.
+# ─────────────────────────────────────────────────────────────────────
+_JOBS: dict[str, dict] = {}
+_JOB_LOCK = threading.Lock()
+
+
+def _job_new(kind: str, total: int) -> str:
+    jid = f"{kind}-{int(time.time() * 1000)}"
+    with _JOB_LOCK:
+        _JOBS[jid] = {"id": jid, "kind": kind, "status": "running",
+                      "total": total, "done": 0, "current": "", "error": None,
+                      "startedAt": time.time()}
+    return jid
+
+
+def _job_set(jid: str, **kw):
+    with _JOB_LOCK:
+        if jid in _JOBS:
+            _JOBS[jid].update(kw)
+
+
+def _job_get(jid: str) -> dict | None:
+    with _JOB_LOCK:
+        j = _JOBS.get(jid)
+        return dict(j) if j else None
+
+
+def _job_run(jid: str, fn):
+    """작업 본체를 별도 스레드에서 돌린다. 예외는 작업에 기록하고 서버는 살려 둔다."""
+    def wrap():
+        try:
+            fn(jid)
+            _job_set(jid, status="done", current="")
+        except Exception as e:
+            L.log("error", "job", f"{jid} 실패 — {e}")
+            _job_set(jid, status="failed", error=f"{type(e).__name__}: {e}")
+    threading.Thread(target=wrap, daemon=True).start()
 
 
 def full_state(st: dict, **extra) -> dict:
@@ -455,57 +500,87 @@ def route(path: str, method: str, body: dict, query: dict):
     # --- 5-b. 문안 생성 -----------------------------------------------------
     # 로컬 모델은 1건에 1분 안팎이 걸린다. 한 요청에 전부 처리하면 HTTP 타임아웃에
     # 걸리므로 batch 건만 만들고 remaining 을 돌려준다.
+    # --- 5. 문안 생성 (백그라운드 작업) --------------------------------------
+    # 로컬 모델은 한 건에 5분이 넘는다. 응답을 붙잡고 기다리면 클라이언트가 먼저 끊는다.
+    # 즉시 작업 번호를 주고, 화면은 /api/job 으로 진행률을 물어본다.
     if path == "/api/generate" and method == "POST":
         channel = body.get("channel", "email")
-        batch = int(body.get("batch", 1))
+        restart = bool(body.get("restart"))
+
         st = store.load()
         sel = set(st.get("selection") or [])
         targets = [c for c in st["cards"] if c["id"] in sel]
-        picked = st.get("copyPicked") or {}
-        common = dict(channel=channel, persona_id=st.get("personaId"),
-                      source_profile=st.get("sourceProfile"))
+        if not targets:
+            return 400, {"error": "발송 대상이 없습니다. STEP 4 에서 먼저 선택하세요."}
 
-        if body.get("restart"):
+        if restart:
             st["templates"] = {}
             for c in targets:
                 c.pop("message", None)
-
-        done = 0
-        if st.get("mode") == "1:N":
-            tpls = dict(st.get("templates") or {})
-            needed = [s for s in dict.fromkeys(c.get("segmentId") for c in targets) if s and s not in tpls]
-            for sid in needed[:batch]:
-                L.log("info", "generate", f"1:N 공통 문안 생성 — {sid}")
-                tpls[sid] = generate.generate_segment_template(
-                    sid, copy_guide=picked.get(sid) or [], **common)
-                done += 1
-            st["templates"] = tpls
-            for c in targets:
-                tpl = tpls.get(c.get("segmentId"))
-                if not tpl:
-                    continue
-                c["message"] = ({**tpl, "mode": "1:N"} if tpl.get("error")
-                                else generate.render_template(tpl, c, channel))
-                c["message"].setdefault("reviewStatus", "PENDING")
-                c["status"] = "HELD" if c["message"].get("error") else "DRAFTED"
-            st["step"] = 5
             store.save(st)
-            remaining = len([s for s in dict.fromkeys(c.get("segmentId") for c in targets)
-                             if s and s not in tpls])
-            return 200, full_state(store.load(), remaining=remaining, done=done)
 
-        for c in [x for x in targets if not x.get("message")][:batch]:
-            L.log("info", "generate", f"1:1 문안 생성 — {c.get('name')} · {c.get('company')}")
-            c["message"] = generate.generate_message(
-                c, c.get("segmentId"), c.get("signals") or {"facts": []},
-                copy_guide=picked.get(c.get("segmentId")) or [], **common)
-            c["message"]["reviewStatus"] = "PENDING"
-            c["status"] = "HELD" if c["message"].get("error") else "DRAFTED"
-            done += 1
-        st["step"] = 5
-        store.save(st)
-        remaining = len([c for c in store.load()["cards"] if c["id"] in sel and not c.get("message")])
-        return 200, full_state(store.load(), remaining=remaining, done=done)
+        mode = st.get("mode")
+        total = (len({c.get("segmentId") for c in targets if c.get("segmentId")})
+                 if mode == "1:N" else len(targets))
+        jid = _job_new("generate", total)
+
+        def work(job_id: str):
+            picked = (store.load().get("copyPicked") or {})
+            common = dict(channel=channel, persona_id=store.load().get("personaId"),
+                          source_profile=store.load().get("sourceProfile"))
+
+            if mode == "1:N":
+                seg_ids = [x for x in dict.fromkeys(c.get("segmentId") for c in targets) if x]
+                for i, sid in enumerate(seg_ids):
+                    _job_set(job_id, current=f"고객군 {sid}", done=i)
+                    L.log("info", "generate", f"1:N 공통 문안 생성 — {sid}")
+                    tpl = generate.generate_segment_template(
+                        sid, copy_guide=picked.get(sid) or [], **common)
+                    cur = store.load()
+                    tpls = dict(cur.get("templates") or {})
+                    tpls[sid] = tpl
+                    cur["templates"] = tpls
+                    for c in cur["cards"]:
+                        if c["id"] not in sel or c.get("segmentId") != sid:
+                            continue
+                        c["message"] = ({**tpl, "mode": "1:N"} if tpl.get("error")
+                                        else generate.render_template(tpl, c, channel))
+                        c["message"].setdefault("reviewStatus", "PENDING")
+                        c["status"] = "HELD" if c["message"].get("error") else "DRAFTED"
+                    cur["step"] = 5
+                    store.save(cur)
+                    _job_set(job_id, done=i + 1)
+                return
+
+            for i, t in enumerate(targets):
+                _job_set(job_id, current=f"{t.get('name')} · {t.get('company')}", done=i)
+                L.log("info", "generate", f"1:1 문안 생성 — {t.get('name')} · {t.get('company')}")
+                msg = generate.generate_message(
+                    t, t.get("segmentId"), t.get("signals") or {"facts": []},
+                    copy_guide=picked.get(t.get("segmentId")) or [], **common)
+                cur = store.load()
+                c = _card(cur, t["id"])
+                if c is not None:
+                    c["message"] = msg
+                    c["message"]["reviewStatus"] = "PENDING"
+                    c["status"] = "HELD" if msg.get("error") else "DRAFTED"
+                cur["step"] = 5
+                store.save(cur)
+                _job_set(job_id, done=i + 1)
+
+        _job_run(jid, work)
+        return 202, {"jobId": jid, "total": total, "status": "running"}
+
+    # --- 작업 진행률 --------------------------------------------------------
+    if path == "/api/job" and method == "GET":
+        jid = (query.get("id") or [""])[0]
+        j = _job_get(jid)
+        if not j:
+            return 404, {"error": "그런 작업이 없습니다."}
+        if j["status"] in ("done", "failed"):
+            return 200, {**j, **full_state(store.load())}
+        return 200, j
+
 
     # --- 6. 검토·승인 (HITL) ------------------------------------------------
     if path == "/api/review" and method == "POST":

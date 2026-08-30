@@ -443,12 +443,44 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.92em}
 @media (prefers-reduced-motion:reduce){
   *{animation-duration:.01ms!important;transition-duration:.01ms!important}
 }
+
+/* ── 처리 흐름도 ─────────────────────────────────────────── */
+.fchain{display:flex;align-items:stretch;gap:6px;overflow-x:auto;padding-bottom:4px}
+.farrow{display:grid;place-items:center;color:var(--tx3);font-size:13px;flex:none;padding:0 1px}
+.fnode{
+  flex:1 1 0;min-width:132px;border:1px solid var(--line2);border-radius:10px;
+  padding:10px 11px;background:var(--s2);transition:all .2s var(--ease);cursor:pointer;
+}
+.fnode:hover{border-color:var(--line3)}
+.fn-top{display:flex;align-items:center;gap:7px}
+.fn-num{
+  width:20px;height:20px;border-radius:50%;flex:none;display:grid;place-items:center;
+  font-size:10.5px;font-weight:700;border:1.5px solid var(--line2);color:var(--tx3);background:var(--s1);
+}
+.fn-lb{font-size:12.5px;font-weight:650;letter-spacing:-.2px}
+.fn-comp{font-size:10px;color:var(--tx3);margin-top:5px;line-height:1.5}
+.fn-msg{font-size:10.5px;margin-top:6px;padding-top:6px;border-top:1px solid var(--line);color:var(--tx2)}
+
+.fnode.done{border-color:var(--ok-line);background:linear-gradient(180deg,var(--ok-bg),var(--s2))}
+.fnode.done .fn-num{border-color:var(--ok-line);background:var(--ok-bg);color:var(--ok)}
+.fnode.ok{border-color:var(--ok-line);background:linear-gradient(180deg,var(--ok-bg),var(--s2))}
+.fnode.ok .fn-num{border-color:var(--ok-line);background:var(--ok-bg);color:var(--ok)}
+.fnode.ok .fn-msg{color:var(--ok)}
+.fnode.fail{border-color:var(--bad-line);background:linear-gradient(180deg,var(--bad-bg),var(--s2))}
+.fnode.fail .fn-num{border-color:var(--bad-line);background:var(--bad-bg);color:var(--bad)}
+.fnode.fail .fn-msg{color:var(--bad)}
+.fnode.run{
+  border-color:var(--br);background:linear-gradient(180deg,var(--br-soft),var(--s2));
+  box-shadow:0 0 0 3px rgba(109,139,255,.16);
+}
+.fnode.run .fn-num{border-color:var(--br);color:#cfe0ff;animation:pulse 1.4s infinite}
+.fnode.run .fn-lb{color:#dce8ff}
 </style>
 </head>
 <body>
 <div class="app">
   <aside>
-    <div class="brand">
+    <div class="brand" id="brand" title="처음 화면(전체 보기)으로 돌아갑니다" style="cursor:pointer">
       <div class="mark">SL</div>
       <div>
         <h1>SafeLead</h1>
@@ -463,6 +495,7 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.92em}
   </aside>
   <main>
     <div class="head" id="head"></div>
+    <div id="flowdiag-slot"></div>
     <div class="flow" id="flow"></div>
     <div id="todo"></div>
     <div id="view"></div>
