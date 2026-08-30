@@ -9,6 +9,7 @@
  * 백엔드가 바뀌어도 호출부(enrich/generate)는 complete() 하나만 쓴다.
  */
 import { spawn } from 'node:child_process';
+import http from 'node:http';
 
 export const CLAUDE_MODEL = 'claude-sonnet-5';
 export const OLLAMA_URL = process.env.OLLAMA_URL ?? 'http://127.0.0.1:11434';
@@ -49,22 +50,55 @@ export async function complete(prompt, { maxTokens = 1500 } = {}) {
   return viaCli(prompt);
 }
 
-/** 로컬 Ollama. 명함 정보가 외부로 나가지 않는다. */
-async function viaOllama(prompt) {
-  const res = await fetch(`${OLLAMA_URL}/api/generate`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      model: OLLAMA_MODEL,
-      prompt,
-      stream: false,
-      options: { temperature: 0.4, num_ctx: 8192 },
-    }),
-    signal: AbortSignal.timeout(180000),
+/**
+ * 로컬 Ollama. 명함 정보가 외부로 나가지 않는다.
+ *
+ * 전역 fetch(undici)는 헤더 응답까지 300초 상한이 걸려 있고 요청 단위로 못 바꾼다.
+ * 로컬 7.8B 모델은 CPU에서 그 이상 걸리는 경우가 있어 node:http 로 직접 호출한다.
+ */
+function viaOllama(prompt) {
+  const timeout = Number(process.env.OLLAMA_TIMEOUT_MS ?? 900000);
+  const url = new URL('/api/generate', OLLAMA_URL);
+  const payload = JSON.stringify({
+    model: OLLAMA_MODEL,
+    prompt,
+    stream: false,
+    // 호출 사이에 모델이 메모리에서 내려가면 다음 호출에 재로딩(수 분)이 붙는다.
+    // 캠페인 한 번은 연속 호출이므로 상주시켜 둔다.
+    keep_alive: process.env.OLLAMA_KEEP_ALIVE ?? '30m',
+    options: {
+      temperature: 0.4,
+      num_ctx: 8192,
+      // 출력 길이를 묶어 두면 생성 시간의 상한도 같이 묶인다.
+      num_predict: Number(process.env.OLLAMA_NUM_PREDICT ?? 800),
+    },
   });
-  if (!res.ok) throw new Error(`Ollama ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const json = await res.json();
-  return String(json.response ?? '').trim();
+
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: url.hostname,
+      port: url.port || 80,
+      path: url.pathname,
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(payload),
+      },
+    }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', d => body += d);
+      res.on('end', () => {
+        if (res.statusCode !== 200) return reject(new Error(`Ollama ${res.statusCode}: ${body.slice(0, 300)}`));
+        try { resolve(String(JSON.parse(body).response ?? '').trim()); }
+        catch (e) { reject(new Error(`Ollama 응답 파싱 실패: ${String(e.message)}`)); }
+      });
+    });
+
+    req.setTimeout(timeout, () => { req.destroy(new Error(`Ollama 타임아웃 (${timeout}ms)`)); });
+    req.on('error', reject);
+    req.end(payload);
+  });
 }
 
 async function viaApi(prompt, maxTokens) {

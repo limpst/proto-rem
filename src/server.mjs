@@ -80,6 +80,25 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, update(st => { st.sourceProfile = profile; }));
     }
 
+    // --- 1-c. 콘솔 스니펫으로 받은 cards.json 업로드 ----------------------
+    if (p === '/api/upload-cards' && req.method === 'POST') {
+      const { cards } = await readBody(req);
+      if (!Array.isArray(cards) || !cards.length) return json(res, 400, { error: '명함 배열이 비어 있습니다' });
+      // 업로드본을 반출본과 같은 자리에 두어 이후 [명함 불러오기]가 그대로 읽게 한다.
+      fs.mkdirSync(path.join(ROOT, 'data'), { recursive: true });
+      fs.writeFileSync(path.join(ROOT, 'data', 'cards.json'), JSON.stringify(cards, null, 2), 'utf8');
+      return json(res, 200, {
+        ...update(st => {
+          st.cards = cards.map(c => ({ ...c, status: 'NEW' }));
+          st.source = 'remember-export';
+          st.selection = [];
+          st.step = 1;
+        }),
+        steps: STEPS, segments: SEGMENTS, company: COMPANY,
+        personas: PERSONAS, backend: await resolveBackend(), smtp: smtpStatus(),
+      });
+    }
+
     // --- 1. 수집 -------------------------------------------------------
     if (p === '/api/ingest' && req.method === 'POST') {
       return json(res, 200, update(st => {
@@ -165,35 +184,54 @@ const server = http.createServer(async (req, res) => {
     }
 
     // --- 5. 생성 --------------------------------------------------------
+    // 로컬 모델은 1건에 1분 안팎이 걸린다. 한 요청에 전부 처리하면 HTTP 헤더 타임아웃
+    // (undici 기본 300초)에 걸리므로, 한 번에 batch 건만 만들고 remaining 을 돌려준다.
+    // 클라이언트가 remaining 이 0이 될 때까지 반복 호출하며 진행률을 보여준다.
     if (p === '/api/generate' && req.method === 'POST') {
-      const { channel = 'email' } = await readBody(req);
+      const { channel = 'email', batch = 1, restart = false } = await readBody(req);
       const st = load();
       const targets = st.cards.filter(c => st.selection.includes(c.id));
       const common = { channel, personaId: st.personaId, sourceProfile: st.sourceProfile };
 
+      if (restart) {
+        st.templates = {};
+        for (const c of targets) delete c.message;
+      }
+
+      let done = 0;
       if (st.mode === '1:N') {
         // 고객군당 공통 문안 1건 → 수신자별 병합필드 치환
-        st.templates = {};
-        for (const sid of [...new Set(targets.map(c => c.segmentId))]) {
+        st.templates ??= {};
+        const needed = [...new Set(targets.map(c => c.segmentId))].filter(sid => !st.templates[sid]);
+        for (const sid of needed.slice(0, batch)) {
           st.templates[sid] = await generateSegmentTemplate({ segmentId: sid, ...common });
+          done += 1;
         }
         for (const c of targets) {
           const tpl = st.templates[c.segmentId];
-          c.message = tpl?.error ? { ...tpl, mode: '1:N' } : renderTemplate(tpl, c, channel);
-          c.message.reviewStatus = 'PENDING';
+          if (!tpl) continue;
+          c.message = tpl.error ? { ...tpl, mode: '1:N' } : renderTemplate(tpl, c, channel);
+          c.message.reviewStatus ??= 'PENDING';
           c.status = c.message.error ? 'HELD' : 'DRAFTED';
         }
-      } else {
-        for (const c of targets) {
-          c.message = await generateMessage({
-            card: c, segmentId: c.segmentId, signals: c.signals ?? { facts: [] }, ...common,
-          });
-          c.message.reviewStatus = 'PENDING';
-          c.status = c.message.error ? 'HELD' : 'DRAFTED';
-        }
+        st.step = 5;
+        save(st);
+        const remaining = [...new Set(targets.map(c => c.segmentId))].filter(sid => !st.templates[sid]).length;
+        return json(res, 200, { ...load(), steps: STEPS, segments: SEGMENTS, company: COMPANY, remaining, done });
+      }
+
+      for (const c of targets.filter(c => !c.message).slice(0, batch)) {
+        c.message = await generateMessage({
+          card: c, segmentId: c.segmentId, signals: c.signals ?? { facts: [] }, ...common,
+        });
+        c.message.reviewStatus = 'PENDING';
+        c.status = c.message.error ? 'HELD' : 'DRAFTED';
+        done += 1;
       }
       st.step = 5;
-      return json(res, 200, save(st));
+      save(st);
+      const remaining = load().cards.filter(c => st.selection.includes(c.id) && !c.message).length;
+      return json(res, 200, { ...load(), steps: STEPS, segments: SEGMENTS, company: COMPANY, remaining, done });
     }
 
     // --- 6. 검토·승인 (HITL) --------------------------------------------

@@ -45,7 +45,15 @@ export function smtpStatus() {
   };
 }
 
-const nightTime = () => {
+/**
+ * 정보통신망법상 광고성 정보의 야간(21~08시) 전송 제한.
+ *
+ * 자가 테스트(본인 주소로 보내보기)는 광고성 전송이 아니므로 막을 이유가 없다.
+ * 그래서 삭제하지 않고 스위치로 둔다: .env 의 ALLOW_NIGHT_SEND=1 이면 해제된다.
+ * 실제 캠페인 전에는 반드시 0(또는 삭제)으로 되돌릴 것.
+ */
+const nightBlocked = (e) => {
+  if (e.ALLOW_NIGHT_SEND === '1') return false;
   const h = new Date().getHours();
   return h >= 21 || h < 8;
 };
@@ -116,7 +124,9 @@ export async function sendEmail({ to, subject, body }) {
     return { ok: false, error: '.env 에 GMAIL_USER / GMAIL_APP_PASSWORD 가 없습니다' };
   }
   if (e.DRY_RUN === '1') return { ok: true, messageId: 'dry-run' };
-  if (nightTime()) return { ok: false, error: '야간(21~08시) 광고 전송 제한 — 예약 발송으로 전환하세요' };
+  if (nightBlocked(e)) {
+    return { ok: false, error: '야간(21~08시) 광고 전송 제한 — 자가 테스트라면 .env 에 ALLOW_NIGHT_SEND=1' };
+  }
 
   const fromName = e.GMAIL_FROM_NAME ?? '에이톰엔지니어링';
   return smtpSend({
