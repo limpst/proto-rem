@@ -15,6 +15,10 @@ const openPrompts = new Set();
 const editing = new Set();
 /* 발송 이력에서 수신 주소를 고치는 중인 명함. 표가 다시 그려져도 유지한다. */
 const editMail = new Set();
+let STATS = null;           // /api/stats 결과 (통계 화면)
+let lastStep = null;        // 같은 단계를 다시 그릴 때 스크롤을 지키려고 기억한다
+let justActed = null;       // 방금 승인·반려한 카드. 다시 그려도 잠깐 표시가 남게 한다
+let justTimer = null;
 
 /* 문구 스튜디오 상태 — 서버가 아니라 화면에 둔다. 고르는 중에는 저장할 게 없다. */
 let palette = null;
@@ -180,6 +184,27 @@ const run = async (label, fn, ctx) => {
   }
 };
 
+/** 흐름을 끊지 않는 알림. 확인 버튼을 누를 필요가 없는 것들에 쓴다. */
+let toastTimer = null;
+function toast2(msg, bad) {
+  let el = document.getElementById('toast2');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast2';
+    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:calc(var(--console-h, 0px) + 26px);'
+      + 'z-index:300;padding:9px 16px;border-radius:99px;font-size:12.5px;font-weight:600;'
+      + 'box-shadow:0 8px 24px #0009;pointer-events:none;opacity:0;transition:opacity .18s';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.background = bad ? '#231416' : '#12241c';
+  el.style.color = bad ? 'var(--bad)' : 'var(--ok)';
+  el.style.border = `1px solid ${bad ? '#5a2c2c' : '#2f5a44'}`;
+  el.style.opacity = '1';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.opacity = '0'; }, 1600);
+}
+
 function toast(msg, bad) {
   LOG.push(bad ? 'error' : 'info', 'ui', msg);
   alert(msg);
@@ -317,7 +342,14 @@ const SHORT = {
 
 /* ── 렌더 ──────────────────────────────────────────────────────────── */
 function render(loading) {
-  try { draw(loading); }
+  // 목록 한가운데서 [승인] 을 누르면 화면이 통째로 다시 그려진다.
+  // 스크롤을 되돌리지 않으면 맨 위로 튀어, 방금 무엇을 눌렀는지 놓친다.
+  const keepY = (lastStep === viewStep) ? window.scrollY : 0;
+  try {
+    draw(loading);
+    lastStep = viewStep;
+    if (keepY) window.scrollTo(0, keepY);
+  }
   catch (e) {
     LOG.push('error', 'render', e?.stack ?? String(e));
     $('#view').innerHTML = `<div class="panel"><div class="cap">화면을 그리지 못했습니다</div>
@@ -358,6 +390,12 @@ function draw(loading) {
       title="7단계를 한 화면에 세로로 펼쳐 봅니다. 전체 흐름을 훑거나 여러 단계를 오가며 작업할 때 씁니다.">
       <div class="num">▤</div>
       <div><div class="lb">전체 보기</div><div class="sb">7단계를 한 화면에</div></div>
+    </div>
+    <div class="step ${viewStep === 'stats' ? 'active' : ''}" data-n="stats"
+      style="margin-bottom:10px;border-bottom:1px solid var(--line);padding-bottom:13px"
+      title="어디까지 왔고 어디서 막혔는지 숫자로 봅니다. 근거가 확인된 것인지 추정인지도 갈라 셉니다.">
+      <div class="num">◧</div>
+      <div><div class="lb">통계</div><div class="sb">진행률 · 막힌 지점</div></div>
     </div>` + steps.map(s => {
     const stt = stepState(s.n, x);
     const done = stt === 'done';
@@ -411,6 +449,20 @@ function draw(loading) {
     ['선택', x.selected], ['초안', x.drafted], ['승인', x.approved], ['발송', x.sent],
   ].map(([k, v]) =>
     `<div class="cell ${v ? 'good' : 'zero'}"><div class="v">${v}</div><div class="k">${k}</div></div>`).join('');
+
+  if (viewStep === 'stats') {
+    $('#head').innerHTML = `
+      <div class="eyebrow">통계</div>
+      <h2>어디까지 왔나</h2>
+      <div class="desc">단계마다 몇 건이 남았고 어디서 막혔는지 봅니다.
+        근거가 <b>확인된 사실</b>인지 <b>추정</b>인지도 갈라 세므로, 메일을 내보내기 전에 여기서 한 번 확인하세요.</div>`;
+    $('#todo').innerHTML = '';
+    $('#view').innerHTML = statsView();
+    bind();
+    // 들어올 때마다 새로 받는다. 숫자는 낡으면 쓸모가 없다.
+    loadStats().then(() => { if (viewStep === 'stats') { $('#view').innerHTML = statsView(); bind(); } });
+    return;
+  }
 
   if (viewStep === 'settings') {
     $('#head').innerHTML = `
@@ -1592,11 +1644,13 @@ function msgCard(c) {
         STEP 2 에서 이 회사 홈페이지 주소를 넣고 STEP 3 리서치를 다시 돌리면 만들어집니다.</div></div>`;
   }
   const st = m.reviewStatus;
-  return `<div class="msg ${st === 'APPROVED' ? 'approved' : ''} ${st === 'REJECTED' ? 'rejected' : ''}" data-id="${c.id}">
+  const fresh = justActed === c.id;
+  return `<div class="msg ${st === 'APPROVED' ? 'approved' : ''} ${st === 'REJECTED' ? 'rejected' : ''}" data-id="${c.id}"
+    ${fresh ? `style="outline:2px solid ${st === 'REJECTED' ? 'var(--bad)' : 'var(--ok)'};outline-offset:2px"` : ''}>
     <div class="to"><b style="color:var(--tx)">${esc(c.name)}</b> ${esc(c.title)} · ${esc(c.company)}
       <span class="tag seg">${esc(seg(c.segmentId)?.label ?? '-')}</span>
       <span class="tag">${esc(m.mode ?? '1:1')}</span>
-      <span class="tag ${st === 'APPROVED' ? 'ok' : st === 'REJECTED' ? 'bad' : ''}">
+      <span class="tag rev-state ${st === 'APPROVED' ? 'ok' : st === 'REJECTED' ? 'bad' : ''}">
         ${st === 'APPROVED' ? '승인됨' : st === 'REJECTED' ? '반려됨' : '검토 대기'}</span></div>
     <div class="checks">${(m.checks ?? []).map(k =>
       `<span class="chk ${k.pass ? 'p' : 'f'}">${k.pass ? '✓' : '✕'} ${esc(k.label)}</span>`).join('')}</div>
@@ -1686,6 +1740,135 @@ const ctxNow = () => ({
     email: val('#acEmail'), phone: val('#acPhone'), site: val('#acSite'),
   },
 });
+
+/* ── 통계 화면 ────────────────────────────────────────────────────
+   막대는 전부 '크기 비교' 하나만 나타낸다. 그래서 색을 여러 개 쓰지 않고
+   한 색의 길이로만 보여 준다. 색으로 뜻을 나누기 시작하면 범례가 필요해지고,
+   색각 이상에서 구분이 안 되는 문제가 따라온다.
+   숫자는 막대 옆에 그대로 적어, 막대를 못 읽어도 값은 항상 읽히게 한다. */
+
+const BAR_H = 'height:9px;border-radius:4px';
+
+function bar(n, max, color = 'var(--accent)') {
+  const w = max > 0 ? Math.max(n > 0 ? 3 : 0, Math.round((n / max) * 100)) : 0;
+  return `<div style="background:var(--sunk);${BAR_H};overflow:hidden;min-width:60px">
+    <div style="width:${w}%;background:${color};${BAR_H}"></div></div>`;
+}
+
+/** 이름 · 막대 · 숫자 한 줄. 표로 짜서 숫자 자리가 흔들리지 않게 한다. */
+function barRows(rows, { color = 'var(--accent)', unit = '건', note = true } = {}) {
+  const max = Math.max(1, ...rows.map(r => r.n));
+  return `<table style="width:100%"><tbody>
+    ${rows.map(r => `<tr>
+      <td style="padding:5px 10px 5px 0;white-space:nowrap;font-size:12.5px" title="${esc(r.note ?? r.key)}">${esc(r.key)}</td>
+      <td style="padding:5px 10px;width:100%">${bar(r.n, max, r.color || color)}</td>
+      <td style="padding:5px 0;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:600">${r.n}<span class="muted" style="font-weight:400;font-size:11px">${unit}</span></td>
+    </tr>${note && r.note ? `<tr><td colspan="3" class="muted" style="padding:0 0 6px;font-size:11px">${esc(r.note)}</td></tr>` : ''}`).join('')}
+  </tbody></table>`;
+}
+
+function tile(label, n, tone, tip) {
+  const c = tone === 'ok' ? 'var(--ok)' : tone === 'warn' ? 'var(--warn)'
+    : tone === 'bad' ? 'var(--bad)' : n ? 'var(--tx)' : 'var(--tx3)';
+  return `<div class="panel" style="margin:0;padding:13px 15px" title="${esc(tip || label)}">
+    <div style="font-size:23px;font-weight:700;letter-spacing:-.5px;line-height:1.15;color:${c};font-variant-numeric:tabular-nums">${n}</div>
+    <div class="muted" style="font-size:11.5px;margin-top:2px">${esc(label)}</div></div>`;
+}
+
+function statsView() {
+  if (!STATS) return '<div class="panel muted">통계를 불러오는 중…</div>';
+  const t = STATS.totals || {};
+  const seg = STATS.segments || [];
+  const maxT = Math.max(1, ...seg.map(r => r.target));
+
+  return `
+  <div class="panel">
+    <div class="cap">지금 상태</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:9px">
+      ${tile('명함', t.cards, '', '가져온 명함 전체입니다.')}
+      ${tile('발송 대상', t.usable, '', '자사·제외를 뺀 실제 후보입니다.')}
+      ${tile('선택', t.selected, '', '사람이 고른 발송 대상입니다.')}
+      ${tile('초안', t.drafted, '', '문안이 만들어진 건입니다.')}
+      ${tile('승인', t.approved, t.approved ? 'ok' : '', '사람이 승인한 건. 이것만 발송됩니다.')}
+      ${tile('발송', t.sent, t.sent ? 'ok' : '', '실제로 나간 건입니다.')}
+      ${tile('보류', t.held, t.held ? 'warn' : '', '근거가 없어 문안을 만들지 않은 건입니다.')}
+      ${tile('반려', t.rejected, t.rejected ? 'warn' : '', '사람이 반려한 건입니다.')}
+      ${tile('주소 없음', t.noEmail, t.noEmail ? 'bad' : '', '수신 이메일이 없어 발송이 막히는 건입니다. STEP 7 이력에서 [수정]으로 넣으세요.')}
+      ${tile('자사·제외', (t.internal || 0) + (t.excluded || 0), '', '어떤 경로로도 발송되지 않는 명함입니다.')}
+    </div>
+    ${t.staleOutside ? `<div class="banner" style="margin:12px 0 0">
+      대상 밖(자사·제외) 명함에 예전 문안 ${t.staleOutside}건이 남아 있습니다.
+      발송되지는 않지만 발송 이력 표에 함께 보입니다.</div>` : ''}
+  </div>
+
+  <div class="panel">
+    <div class="cap">단계별로 얼마나 남았나
+      <span class="muted" style="font-weight:400">— 뒤로 갈수록 줄어드는 것이 정상입니다</span></div>
+    ${barRows((STATS.funnel || []).map(f => ({ key: f.key, n: f.n, note: f.note })))}
+  </div>
+
+  <div class="panel">
+    <div class="cap">근거가 어디서 왔나
+      <span class="muted" style="font-weight:400">— 확인한 것과 추정한 것을 갈라 셉니다</span></div>
+    ${barRows((STATS.evidence || []).map(e => ({
+      key: e.key, n: e.n,
+      color: e.key === '홈페이지 직접 분석' ? 'var(--ok)' : e.key === '근거 없음' ? 'var(--bad)' : 'var(--warn)',
+      note: e.key === '홈페이지 직접 분석' ? '그 회사 홈페이지에서 실제로 읽은 사실입니다.'
+        : e.key === '같은 업종 사례' ? '다른 회사에서 확인된 사실을 사례로 빌려 왔습니다. 문장에 출처가 붙습니다.'
+        : e.key === '업종 표준값' ? '그 업종이면 대체로 참인 일반론입니다. 회사별 사실이 아닙니다.'
+        : '인용할 사실이 없어 문안이 일반적으로 나옵니다.',
+    })), { note: true })}
+  </div>
+
+  <div class="panel">
+    <div class="cap">고객군별 진행</div>
+    ${seg.length ? `<div class="tw"><table><thead><tr>
+      <th style="width:30%">고객군</th><th>진행</th>
+      <th style="text-align:right">대상</th><th style="text-align:right">근거</th>
+      <th style="text-align:right">초안</th><th style="text-align:right">승인</th><th style="text-align:right">발송</th>
+    </tr></thead><tbody>
+      ${seg.map(r => `<tr>
+        <td style="font-size:12.5px">${esc(r.label)}</td>
+        <td style="min-width:120px" title="대상 ${r.target}건 중 ${r.sent}건 발송">${bar(r.target, maxT)}</td>
+        <td style="text-align:right;font-variant-numeric:tabular-nums">${r.target}</td>
+        <td style="text-align:right;font-variant-numeric:tabular-nums" class="${r.facts ? '' : 'muted'}">${r.facts}</td>
+        <td style="text-align:right;font-variant-numeric:tabular-nums" class="${r.drafted ? '' : 'muted'}">${r.drafted}</td>
+        <td style="text-align:right;font-variant-numeric:tabular-nums" class="${r.approved ? '' : 'muted'}">${r.approved}</td>
+        <td style="text-align:right;font-variant-numeric:tabular-nums" class="${r.sent ? '' : 'muted'}">${r.sent}</td>
+      </tr>`).join('')}
+    </tbody></table></div>` : '<div class="muted">아직 분류된 대상이 없습니다. STEP 4 에서 고객군을 나누세요.</div>'}
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:13px">
+    <div class="panel">
+      <div class="cap">홈페이지를 어떻게 찾았나</div>
+      ${(STATS.siteVia || []).length
+        ? barRows(STATS.siteVia.map(v => ({ key: v.key, n: v.n })), { note: false })
+        : '<div class="muted">아직 없습니다.</div>'}
+    </div>
+    <div class="panel">
+      <div class="cap">발송 상태</div>
+      ${(STATS.status || []).length
+        ? barRows(STATS.status.map(v => ({
+            key: v.key, n: v.n,
+            color: v.key === 'SENT' ? 'var(--ok)' : v.key === 'SEND_FAILED' ? 'var(--bad)'
+              : v.key === 'NO_EMAIL' ? 'var(--warn)' : 'var(--accent)',
+          })), { note: false })
+        : '<div class="muted">아직 없습니다.</div>'}
+    </div>
+  </div>
+
+  ${(STATS.errors || []).length ? `<div class="panel">
+    <div class="cap">막힌 이유 <span class="muted" style="font-weight:400">— 많은 순서</span></div>
+    ${barRows(STATS.errors.map(e => ({ key: e.key, n: e.n, color: 'var(--bad)' })), { note: false })}
+  </div>` : ''}`;
+}
+
+async function loadStats() {
+  const r = await api('/api/stats');
+  if (!r?.error) STATS = r;
+  return STATS;
+}
 
 function bind() {
   const acts = {
@@ -2148,11 +2331,36 @@ function bind() {
   document.querySelectorAll('[data-rev]').forEach(b => {
     b.onclick = async () => {
       const box = b.closest('.msg');
+      const act = b.dataset.rev;
+      // 서버 왕복은 짧아도 그동안 화면이 가만히 있으면 눌린 줄 모르고 또 누른다.
+      // 먼저 눈에 보이게 바꾸고, 응답이 오면 진짜 상태로 확정한다.
+      box.querySelectorAll('[data-rev]').forEach(x => { x.disabled = true; });
+      if (act !== 'save') {
+        box.classList.toggle('approved', act === 'approve');
+        box.classList.toggle('rejected', act === 'reject');
+        const tag = box.querySelector('.rev-state');
+        if (tag) {
+          tag.textContent = act === 'approve' ? '승인됨' : '반려됨';
+          tag.className = `tag ${act === 'approve' ? 'ok' : 'bad'} rev-state`;
+        }
+        // 상단 카운터도 같이 올려 준다. 숫자가 움직여야 반영된 것이 보인다.
+        const cell = [...document.querySelectorAll('.flow .cell')]
+          .find(e => e.querySelector('.k')?.textContent === (act === 'approve' ? '승인' : ''));
+        const v = cell?.querySelector('.v');
+        if (v) { v.textContent = String((Number(v.textContent) || 0) + 1); cell.classList.add('good'); }
+      }
+      box.style.transition = 'outline-color .5s';
+      box.style.outline = `2px solid ${act === 'reject' ? 'var(--bad)' : 'var(--ok)'}`;
       adopt(await api('/api/review', {
-        id: box.dataset.id, action: b.dataset.rev,
+        id: box.dataset.id, action: act,
         subject: box.querySelector('.f-subject')?.value,
         body: box.querySelector('.f-body')?.value,
       }));
+      toast2(act === 'approve' ? '승인했습니다' : act === 'reject' ? '반려했습니다' : '고친 내용을 저장했습니다');
+      STATS = null;                 // 통계로 넘어가면 새로 받도록
+      justActed = box.dataset.id;   // 다시 그려도 방금 누른 카드가 어디였는지 보이게
+      clearTimeout(justTimer);
+      justTimer = setTimeout(() => { justActed = null; render(); }, 1800);
       render();
     };
   });

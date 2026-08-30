@@ -965,6 +965,121 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
         return 200, full_state(store.update(apply))
 
     # --- 5-a. 문구 스튜디오 -------------------------------------------------
+    # --- 통계 -------------------------------------------------------------
+    # 화면이 직접 세지 않고 서버가 한 번에 준다. 같은 수를 두 곳에서 따로 세면
+    # 어느 쪽이 맞는지 알 수 없게 되고, 실제로 그런 어긋남이 몇 번 있었다.
+    if path == "/api/stats" and method == "GET":
+        st = store.load()
+        cards = st.get("cards") or []
+        sel = set(st.get("selection") or [])
+        usable = [c for c in cards if not c.get("excluded") and c.get("segmentId") != "internal"]
+
+        def facts_of(c):
+            return ((c.get("signals") or {}).get("facts")) or []
+
+        def msg_of(c):
+            return c.get("message") or {}
+
+        drafted = [c for c in cards if msg_of(c) and not msg_of(c).get("error")]
+        held = [c for c in cards if msg_of(c).get("error")]
+        approved = [c for c in cards if msg_of(c).get("reviewStatus") == "APPROVED"]
+        rejected = [c for c in cards if msg_of(c).get("reviewStatus") == "REJECTED"]
+        sent = [c for c in cards if c.get("status") == "SENT"]
+
+        # 퍼널: 앞 단계의 부분집합이라 줄어드는 것이 정상이다.
+        funnel = [
+            {"key": "대상", "n": len(usable), "note": "자사·제외를 뺀 발송 후보"},
+            {"key": "홈페이지", "n": sum(1 for c in usable if c.get("siteUrl")), "note": "주소를 확보한 회사"},
+            {"key": "근거", "n": sum(1 for c in usable if facts_of(c)), "note": "메일에 인용할 사실이 있는 회사"},
+            {"key": "선택", "n": sum(1 for c in usable if c["id"] in sel), "note": "사람이 고른 발송 대상"},
+            # 퍼널은 앞 단계의 부분집합이어야 읽힌다. 그래서 '대상' 안에서만 센다.
+            # (자사·제외 명함이 예전 실행의 문안을 갖고 있으면 전체 수는 대상보다 커진다)
+            {"key": "초안", "n": sum(1 for c in usable if msg_of(c) and not msg_of(c).get("error")),
+             "note": "문안이 만들어진 건"},
+            {"key": "승인", "n": sum(1 for c in usable if msg_of(c).get("reviewStatus") == "APPROVED"),
+             "note": "사람이 승인한 건"},
+            {"key": "발송", "n": sum(1 for c in usable if c.get("status") == "SENT"),
+             "note": "실제로 나간 건"},
+        ]
+        # 대상 밖(자사·제외)에 남아 있는 문안. 있으면 화면이 이유를 밝힌다.
+        stale = [c for c in cards
+                 if c.get("message") and (c.get("excluded") or c.get("segmentId") == "internal")]
+
+        # 고객군별
+        by = {}
+        for c in usable:
+            sid = c.get("segmentId") or "unclassified"
+            b = by.setdefault(sid, {
+                "segmentId": sid,
+                "label": (seg_of(sid) or {}).get("label") if seg_of(sid) else "미분류",
+                "target": 0, "facts": 0, "drafted": 0, "approved": 0, "sent": 0,
+            })
+            b["target"] += 1
+            if facts_of(c):
+                b["facts"] += 1
+            m = msg_of(c)
+            if m and not m.get("error"):
+                b["drafted"] += 1
+            if m.get("reviewStatus") == "APPROVED":
+                b["approved"] += 1
+            if c.get("status") == "SENT":
+                b["sent"] += 1
+        segments = sorted(by.values(), key=lambda b: (-b["target"], b["label"]))
+
+        # 근거가 어디서 왔는가 — 추정과 확인을 갈라 세는 것이 이 화면의 요점이다.
+        EV = {"홈페이지 직접 분석": 0, "같은 업종 사례": 0, "업종 표준값": 0, "근거 없음": 0}
+        for c in usable:
+            sg = c.get("signals") or {}
+            if not sg.get("facts"):
+                EV["근거 없음"] += 1
+            elif sg.get("kind") == "sector":
+                EV["업종 표준값"] += 1
+            elif sg.get("kind") == "proxy":
+                EV["같은 업종 사례"] += 1
+            else:
+                EV["홈페이지 직접 분석"] += 1
+
+        VIA_LABEL = {"card": "명함에 적힌 주소", "email-domain": "이메일 도메인",
+                     "llm-guess": "AI 추정", "manual": "직접 입력",
+                     "same-company": "같은 회사에서 물려받음", "none": "찾지 못함"}
+        via = {}
+        for c in usable:
+            v = (c.get("siteResolve") or {}).get("via")
+            key = VIA_LABEL.get(v) or ("있음" if c.get("siteUrl") else "탐색 안 함")
+            via[key] = via.get(key, 0) + 1
+
+        status = {}
+        for c in cards:
+            if not c.get("message"):
+                continue
+            k = c.get("status") or "-"
+            status[k] = status.get(k, 0) + 1
+
+        errors = {}
+        for c in cards:
+            e = (c.get("deliverError") or "").strip()
+            if e:
+                errors[e[:70]] = errors.get(e[:70], 0) + 1
+
+        return 200, {
+            "totals": {
+                "cards": len(cards), "usable": len(usable),
+                "excluded": sum(1 for c in cards if c.get("excluded")),
+                "internal": sum(1 for c in cards if c.get("segmentId") == "internal"),
+                "selected": len(sel), "drafted": len(drafted), "held": len(held),
+                "approved": len(approved), "rejected": len(rejected), "sent": len(sent),
+                "noEmail": sum(1 for c in usable if not c.get("email")),
+                "staleOutside": len(stale),
+            },
+            "funnel": funnel,
+            "segments": segments,
+            "evidence": [{"key": k, "n": v} for k, v in EV.items()],
+            "siteVia": sorted([{"key": k, "n": v} for k, v in via.items()], key=lambda r: -r["n"]),
+            "status": sorted([{"key": k, "n": v} for k, v in status.items()], key=lambda r: -r["n"]),
+            "errors": sorted([{"key": k, "n": v} for k, v in errors.items()], key=lambda r: -r["n"])[:8],
+            "scenario": st.get("scenarioRun") or None,
+        }
+
     if path == "/api/copy-keywords" and method == "POST":
         st = store.load()
         c = _card(st, body.get("id")) if body.get("id") else None
