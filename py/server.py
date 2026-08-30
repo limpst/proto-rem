@@ -27,6 +27,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import classify_ai, copy_ai, deliver, enrich, generate, llm, normalize, resolve
 from . import sector_fallback as SF
+from . import upsert as UP
 from . import store
 from . import log as L
 from .domain import COMPANY, PERSONAS, SEGMENTS, classify
@@ -188,12 +189,15 @@ def route(path: str, method: str, body: dict, query: dict):
         (DATA / "cards.json").write_text(json.dumps(cards, ensure_ascii=False, indent=2), encoding="utf-8")
         L.log("ok", "ingest", f"업로드 {len(cards)}건")
 
-        def apply(st):
-            st["cards"] = [{**c, "status": "NEW"} for c in cards]
-            st["source"] = "remember-export"
-            st["selection"] = []
-            st["step"] = 1
-        return 200, full_state(store.update(apply))
+        st = store.load()
+        r = UP.upsert_cards(st.get("cards") or [], cards, mode=body.get("mode") or "upsert")
+        st["cards"] = r["cards"]
+        st["source"] = "remember-export"
+        store.save(st)
+        L.log("ok", "ingest",
+              f"UPSERT — 추가 {r['inserted']} · 갱신 {r['updated']} · 변화없음 {r['unchanged']}")
+        return 200, full_state(store.load(),
+                               upsert={k: r[k] for k in ("inserted", "updated", "unchanged", "details")})
 
     # --- 1. 수집 ---------------------------------------------------------
     if path == "/api/ingest" and method == "POST":
@@ -208,11 +212,17 @@ def route(path: str, method: str, body: dict, query: dict):
             return 400, {"error": f"{src_file.name} 을 읽지 못했습니다: {e}"}
         L.log("ok", "ingest", f"{src_file.name} 에서 {len(src)}건 불러옴")
 
-        def apply(st):
-            st["cards"] = [{**c, "status": "NEW"} for c in src]
-            st["source"] = "remember-export" if src_file == exported else "seed-sample"
-            st["step"] = 1
-        return 200, full_state(store.update(apply))
+        st = store.load()
+        r = UP.upsert_cards(st.get("cards") or [], normalize.to_cards(src),
+                            mode=body.get("mode") or "upsert")
+        st["cards"] = r["cards"]
+        st["source"] = "remember-export" if src_file == exported else "seed-sample"
+        st["step"] = max(st.get("step") or 1, 1)
+        store.save(st)
+        L.log("ok", "ingest",
+              f"UPSERT — 추가 {r['inserted']} · 갱신 {r['updated']} · 변화없음 {r['unchanged']}")
+        return 200, full_state(store.load(),
+                               upsert={k: r[k] for k in ("inserted", "updated", "unchanged", "details")})
 
     # --- 1-d. 텍스트로 명함 직접 입력 -------------------------------------
     if path == "/api/paste-cards" and method == "POST":
@@ -223,12 +233,17 @@ def route(path: str, method: str, body: dict, query: dict):
         (DATA / "cards.json").write_text(json.dumps(parsed["cards"], ensure_ascii=False, indent=2), encoding="utf-8")
         L.log("ok", "ingest", f"붙여넣기 {len(parsed['cards'])}건 ({parsed['mode']})")
 
-        def apply(st):
-            st["cards"] = [{**c, "status": "NEW", "source": "paste"} for c in parsed["cards"]]
-            st["source"] = "paste"
-            st["selection"] = []
-            st["step"] = 1
-        return 200, full_state(store.update(apply), parsedAs=parsed["mode"])
+        st = store.load()
+        r = UP.upsert_cards(st.get("cards") or [], parsed["cards"],
+                            mode=body.get("mode") or "upsert")
+        st["cards"] = r["cards"]
+        st["source"] = "paste"
+        st["step"] = max(st.get("step") or 1, 1)
+        store.save(st)
+        L.log("ok", "ingest",
+              f"UPSERT — 추가 {r['inserted']} · 갱신 {r['updated']} · 변화없음 {r['unchanged']}")
+        return 200, full_state(store.load(), parsedAs=parsed["mode"],
+                               upsert={k: r[k] for k in ("inserted", "updated", "unchanged", "details")})
 
     # --- 2. 발신 설정 + 발송 모드 (HITL) ----------------------------------
     if path == "/api/mode" and method == "POST":
