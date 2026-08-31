@@ -755,21 +755,47 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
 
     # --- 4. 고객군 분류 + 선택 (HITL) --------------------------------------
     if path == "/api/segment" and method == "POST":
+        # 사람이 표에서 직접 고른 고객군과 AI 가 판단한 결과는 다시 덮지 않는다.
+        # 규칙은 회사명만 보므로, 사람·AI 가 더 많은 근거로 내린 판단을 이길 수 없다.
+        # force:true 를 주면 전부 다시 판정한다.
+        KEEP_SOURCES = ("manual", "ai", "fallback")
+        force = bool(body.get("force"))
+        rescored = {"n": 0, "kept": 0}
+
         def rule(st):
             for c in st["cards"]:
+                if not force and c.get("segmentSource") in KEEP_SOURCES:
+                    rescored["kept"] += 1
+                    if c.get("status") in (None, "NEW", "RESOLVED"):
+                        c["status"] = "SCORED"
+                    continue
                 r = classify(c)
                 c["segmentId"] = r["segmentId"]
                 c["segmentScore"] = r["score"]
                 c["segmentSource"] = ("rule" if r["segmentId"] in ("internal", "excluded")
                                       else (None if r["segmentId"] == "unclassified" else "keyword"))
                 c["status"] = "SCORED"
+                rescored["n"] += 1
             st["step"] = 4
         st = store.update(rule)
+        if rescored["kept"]:
+            L.log("ok", "segment",
+                  f"규칙 분류 {rescored['n']}건 · 사람/AI 판단 {rescored['kept']}건은 그대로 둠")
 
         if body.get("useAi"):
             st = store.load()
-            todo = [c for c in st["cards"] if not c.get("excluded") and c.get("segmentId") == "unclassified"]
-            L.log("info", "segment", f"AI 분류 — {len(todo)}건")
+            # 이미 AI 가 판단한 건은 다시 묻지 않는다. 같은 입력에 같은 답이 나오고,
+            # 건당 수 초씩 걸리므로 반복 호출은 시간과 토큰만 쓴다.
+            todo = [c for c in st["cards"]
+                    if not c.get("excluded") and c.get("segmentId") == "unclassified"
+                    and not (c.get("segmentAi") and not force)]
+            skipped = sum(1 for c in st["cards"]
+                          if c.get("segmentAi") and c.get("segmentId") == "unclassified")
+            L.log("info", "segment",
+                  f"AI 분류 — {len(todo)}건"
+                  + (f" (이미 판단한 {skipped}건은 건너뜀)" if skipped and not force else ""))
+            if not todo:
+                return 200, full_state(store.load(), nothingToDo=True)
             for c in todo:
                 r = classify_ai.classify_one(c)
                 c["segmentId"] = r["segmentId"]

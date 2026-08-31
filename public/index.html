@@ -44,6 +44,56 @@
   --side-w:272px;
   --console-h:38px;
   --ease:cubic-bezier(.4,0,.2,1);
+
+  /* ── 글자 크기 — 24가지를 9단계로 모았다 ────────────────────────
+     0.3px 차이는 눈으로 구분되지 않으면서 손댈 때마다 어긋난다. */
+  --fs-0:9px;      /* 마이크로 배지 */
+  --fs-1:10.5px;   /* 라벨 · 캡션 */
+  --fs-2:11.5px;   /* 보조 설명 */
+  --fs-3:12.5px;   /* UI 기본 */
+  --fs-4:13px;     /* 본문 */
+  --fs-5:14px;     /* 강조 본문 */
+  --fs-6:17px;     /* 소제목 */
+  --fs-7:20px;     /* 지표 숫자 */
+  --fs-8:25px;     /* 화면 제목 */
+
+  /* ── 간격 — 덩어리 안은 좁게, 덩어리 사이는 넓게 ───────────────── */
+  --sp-1:4px; --sp-2:6px; --sp-3:9px; --sp-4:13px;
+  --sp-5:18px; --sp-6:26px; --sp-7:38px;
+
+  /* ── 잉크 단계 ─────────────────────────────────────────────────── */
+  --tx4:#586275;         /* 완료·비활성 글자 */
+  --tx5:#4a5364;         /* 가장 흐린 것 */
+  --ink-code:#c8d2e4;
+  --ink-log:#b9c4d6;
+
+  /* ── 브랜드 잉크 (배경 위에 얹는 글자·강조) ────────────────────── */
+  --br-ink:#dbe6ff; --br-ink2:#bcd0ff; --br-ink3:#a9c2ff;
+  --br-grad:#5f7ef5;     /* 버튼 그라디언트 끝 */
+  --br-glow:#9fb4ff;     /* 지표 숫자 그라디언트 */
+  --on-brand:#07101f;    /* 브랜드색 위에 얹는 글자 */
+
+  /* ── 표면 미세 단계 ────────────────────────────────────────────── */
+  --s-side1:#0f1218; --s-side2:#0b0d12;   /* 사이드바 그라디언트 */
+  --s-head:#10131a;                        /* 표 머리글 */
+  --s-hover:#151922;                       /* 줄·항목 호버 */
+  --s-tip:#171c26;                         /* 툴팁 */
+  --s-track:#0b0e14;                       /* 막대 트랙 */
+  --s-bar:#242c3a; --s-bar2:#323c50;       /* 스크롤바 */
+  --s-flow2:#0f131a;
+  --s-step-active:#111a2e;
+  --s-todo1:#151e36; --s-todo2:#111623;
+  --s-todo-w1:#231a10; --s-todo-w2:#181410;
+  --s-todo-g1:#0f2119; --s-todo-g2:#101a16;
+  --s-copy-on:#12161f; --s-opt-on:#111624;
+  --s-banner-info:#0f1728;
+
+  /* ── 상태 잉크 ─────────────────────────────────────────────────── */
+  --ok-ink:#6ee7b7; --ok-deep:#22b183; --ok-on:#052b20;
+  --warn-ink:#fcd34d;
+  --bad-ink:#fda4af; --bad-hover:#2f1720;
+  --info-ink:#7dd3fc; --ai-ink:#a5b4fc;
+
 }
 
 *{box-sizing:border-box}
@@ -67,8 +117,8 @@ button,input,textarea,select{font-family:inherit}
 
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:#242c3a;border-radius:99px;border:3px solid transparent;background-clip:content-box}
-::-webkit-scrollbar-thumb:hover{background:#323c50;background-clip:content-box}
+::-webkit-scrollbar-thumb{background:var(--s-bar);border-radius:99px;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--s-bar2);background-clip:content-box}
 
 /* ── 레이아웃 ─────────────────────────────────────────────── */
 .app{display:grid;grid-template-columns:var(--side-w) 1fr;min-height:100vh;position:relative;z-index:1}
@@ -76,7 +126,7 @@ button,input,textarea,select{font-family:inherit}
 /* ── 사이드바 — 어느 화면에서도 항상 보인다 ────────────────── */
 aside{
   position:sticky;top:0;height:100vh;overflow-y:auto;overscroll-behavior:contain;
-  background:linear-gradient(180deg,#0f1218,#0b0d12);
+  background:linear-gradient(180deg,var(--s-side1),var(--s-side2));
   border-right:1px solid var(--line);
   display:flex;flex-direction:column;
 }
@@ -84,15 +134,15 @@ aside{
 .brand .mark{
   width:34px;height:34px;border-radius:10px;flex:none;display:grid;place-items:center;
   background:linear-gradient(135deg,var(--br),var(--br2));
-  color:#07101f;font-weight:800;font-size:15px;letter-spacing:-.6px;
+  color:var(--on-brand);font-weight:800;font-size:var(--fs-5);letter-spacing:-.6px;
   box-shadow:0 6px 18px -6px rgba(109,139,255,.65);
 }
-.brand h1{margin:0;font-size:14.5px;font-weight:700;letter-spacing:-.3px}
-.brand .co{color:var(--tx3);font-size:11px;margin-top:2px;letter-spacing:-.1px}
+.brand h1{margin:0;font-size:var(--fs-5);font-weight:700;letter-spacing:-.3px}
+.brand .co{color:var(--tx3);font-size:var(--fs-2);margin-top:2px;letter-spacing:-.1px}
 
 .nav{padding:14px 12px 8px;flex:1}
 .nav .sec{
-  color:var(--tx3);font-size:10px;letter-spacing:1.1px;text-transform:uppercase;
+  color:var(--tx3);font-size:var(--fs-1);letter-spacing:1.1px;text-transform:uppercase;
   font-weight:700;padding:4px 10px 10px;
 }
 /* 단계 사이를 잇는 세로선 — 파이프라인이라는 걸 형태로 보여준다 */
@@ -106,7 +156,7 @@ aside{
   padding:9px 10px;border-radius:10px;cursor:pointer;
   transition:background .15s var(--ease),transform .15s var(--ease);
 }
-.step:hover{background:#151a23}
+.step:hover{background:var(--s-hover)}
 .step:active{transform:scale(.985)}
 .step.active{background:linear-gradient(90deg,var(--br-soft),rgba(20,29,56,.35));box-shadow:inset 0 0 0 1px var(--br-line)}
 .step.active::after{
@@ -115,27 +165,27 @@ aside{
 }
 .step .num{
   position:relative;z-index:1;width:29px;height:29px;border-radius:50%;
-  display:grid;place-items:center;font-size:14px;font-weight:800;margin-top:0;
+  display:grid;place-items:center;font-size:var(--fs-5);font-weight:800;margin-top:0;
   border:1.5px solid var(--line2);background:var(--s1);color:var(--tx3);
   transition:all .18s var(--ease);
 }
 .step.done .num{border-color:var(--ok-line);background:var(--ok-bg);color:var(--ok)}
-.step.ready .num{border-color:var(--br);color:#bcd0ff;box-shadow:0 0 0 4px rgba(109,139,255,.13)}
-.step.active .num{border-color:var(--br);background:#111a2e;color:#dbe6ff}
-.step .lb{font-size:12.8px;font-weight:600;letter-spacing:-.2px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.step.active .lb{color:#e2eaff}
-.step .sb{font-size:10.8px;color:var(--tx3);margin-top:2px;line-height:1.45}
-.step.done .sb{color:#3f6b58}
+.step.ready .num{border-color:var(--br);color:var(--br-ink2);box-shadow:0 0 0 4px rgba(109,139,255,.13)}
+.step.active .num{border-color:var(--br);background:var(--s-step-active);color:var(--br-ink)}
+.step .lb{font-size:var(--fs-3);font-weight:600;letter-spacing:-.2px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.step.active .lb{color:var(--br-ink)}
+.step .sb{font-size:var(--fs-1);color:var(--tx3);margin-top:2px;line-height:1.45}
+.step.done .sb{color:var(--tx5)}
 .hitl{
-  font-size:8px;background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line);
+  font-size:var(--fs-0);background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line);
   padding:1px 5px;border-radius:99px;font-weight:700;letter-spacing:.4px;line-height:1.5;
 }
 .dot{width:6px;height:6px;border-radius:50%;background:var(--br);flex:none;animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(109,139,255,.5)}50%{box-shadow:0 0 0 5px rgba(109,139,255,0)}}
 
-.sidefoot{border-top:1px solid var(--line);padding:12px 16px 14px;font-size:11px}
+.sidefoot{border-top:1px solid var(--line);padding:12px 16px 14px;font-size:var(--fs-2)}
 .sidefoot dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 10px;align-items:center}
-.sidefoot dt{color:var(--tx3);font-size:10.5px}
+.sidefoot dt{color:var(--tx3);font-size:var(--fs-1)}
 .sidefoot dd{margin:0;text-align:right;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* ── 본문 ─────────────────────────────────────────────────── */
@@ -146,39 +196,39 @@ main{
 .head{margin-bottom:18px}
 .head .eyebrow{
   display:inline-flex;align-items:center;gap:7px;color:var(--tx3);
-  font-size:10.5px;letter-spacing:1.1px;text-transform:uppercase;font-weight:700;
+  font-size:var(--fs-1);letter-spacing:1.1px;text-transform:uppercase;font-weight:700;
 }
-.head h2{margin:6px 0 5px;font-size:25px;font-weight:700;letter-spacing:-.7px;line-height:1.25}
-.head .desc{color:var(--tx2);font-size:13px;max-width:74ch}
+.head h2{margin:6px 0 5px;font-size:var(--fs-8);font-weight:700;letter-spacing:-.7px;line-height:1.25}
+.head .desc{color:var(--tx2);font-size:var(--fs-4);max-width:74ch}
 
 /* 진행 현황 — 8칸 지표 */
 .flow{
   display:grid;grid-template-columns:repeat(8,1fr);margin:0 0 18px;
-  background:linear-gradient(180deg,var(--s2),#0f131a);
+  background:linear-gradient(180deg,var(--s2),var(--s-flow2));
   border:1px solid var(--line);border-radius:var(--r);overflow:hidden;box-shadow:var(--sh);
 }
 .flow .cell{padding:12px 8px;text-align:center;position:relative}
 .flow .cell+.cell::before{content:"";position:absolute;left:0;top:22%;bottom:22%;width:1px;background:var(--line)}
-.flow .cell .v{font-size:20px;font-weight:750;letter-spacing:-.8px;line-height:1.15;font-variant-numeric:tabular-nums}
-.flow .cell .k{font-size:10px;color:var(--tx3);margin-top:3px;letter-spacing:.2px}
-.flow .cell.zero .v{color:#3a4252}
-.flow .cell.good .v{background:linear-gradient(135deg,#eaeef6,#9fb4ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.flow .cell .v{font-size:var(--fs-7);font-weight:750;letter-spacing:-.8px;line-height:1.15;font-variant-numeric:tabular-nums}
+.flow .cell .k{font-size:var(--fs-1);color:var(--tx3);margin-top:3px;letter-spacing:.2px}
+.flow .cell.zero .v{color:var(--tx5)}
+.flow .cell.good .v{background:linear-gradient(135deg,#eaeef6,var(--br-glow));-webkit-background-clip:text;background-clip:text;color:transparent}
 
 /* 다음 할 일 */
 .todo{
   position:relative;overflow:hidden;
-  background:linear-gradient(135deg,#151e36,#111623);
+  background:linear-gradient(135deg,var(--s-todo1),var(--s-todo2));
   border:1px solid var(--br-line);border-radius:var(--r-lg);
   padding:18px 20px;margin-bottom:16px;box-shadow:var(--sh);
 }
 .todo::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,var(--br),var(--br2))}
-.todo .t{font-size:10.5px;color:#9bb6f5;letter-spacing:1px;text-transform:uppercase;font-weight:700}
-.todo .m{font-size:16.5px;margin:6px 0 5px;font-weight:700;letter-spacing:-.4px}
-.todo .s{font-size:12.5px;color:var(--tx2);margin-bottom:14px;max-width:82ch}
-.todo.blocked{background:linear-gradient(135deg,#231a10,#181410);border-color:var(--warn-line)}
+.todo .t{font-size:var(--fs-1);color:var(--br-ink3);letter-spacing:1px;text-transform:uppercase;font-weight:700}
+.todo .m{font-size:var(--fs-6);margin:6px 0 5px;font-weight:700;letter-spacing:-.4px}
+.todo .s{font-size:var(--fs-3);color:var(--tx2);margin-bottom:14px;max-width:82ch}
+.todo.blocked{background:linear-gradient(135deg,var(--s-todo-w1),var(--s-todo-w2));border-color:var(--warn-line)}
 .todo.blocked::before{background:var(--warn)}
 .todo.blocked .t{color:var(--warn)}
-.todo.done{background:linear-gradient(135deg,#0f2119,#101a16);border-color:var(--ok-line)}
+.todo.done{background:linear-gradient(135deg,var(--s-todo-g1),var(--s-todo-g2));border-color:var(--ok-line)}
 .todo.done::before{background:var(--ok)}
 .todo.done .t{color:var(--ok)}
 
@@ -188,11 +238,11 @@ main{
   padding:18px 20px;margin-bottom:14px;box-shadow:var(--sh);
 }
 .panel>.cap{
-  font-size:11.5px;color:var(--tx2);margin-bottom:13px;font-weight:600;
+  font-size:var(--fs-2);color:var(--tx2);margin-bottom:13px;font-weight:600;
   letter-spacing:.2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
 }
 details.panel>summary{
-  cursor:pointer;font-size:12.5px;color:var(--tx2);list-style:none;
+  cursor:pointer;font-size:var(--fs-3);color:var(--tx2);list-style:none;
   display:flex;align-items:center;gap:8px;font-weight:500;
 }
 details.panel>summary::-webkit-details-marker{display:none}
@@ -206,8 +256,8 @@ details.panel>.body{margin-top:16px}
 
 /* 버튼 */
 button{
-  background:linear-gradient(135deg,var(--br),#5f7ef5);color:#fff;border:0;border-radius:var(--r-sm);
-  padding:9px 17px;font-size:12.8px;font-weight:650;cursor:pointer;letter-spacing:-.1px;
+  background:linear-gradient(135deg,var(--br),var(--br-grad));color:#fff;border:0;border-radius:var(--r-sm);
+  padding:9px 17px;font-size:var(--fs-3);font-weight:650;cursor:pointer;letter-spacing:-.1px;
   box-shadow:0 1px 2px rgba(0,0,0,.3),0 6px 16px -8px rgba(109,139,255,.8);
   transition:transform .12s var(--ease),box-shadow .18s var(--ease),filter .18s var(--ease);
 }
@@ -217,45 +267,45 @@ button:active:not(:disabled){transform:translateY(0)}
 button:disabled{opacity:.3;cursor:not-allowed;box-shadow:none;filter:grayscale(.4)}
 button.ghost{background:var(--s3);border:1px solid var(--line2);color:var(--tx2);box-shadow:none}
 button.ghost:hover:not(:disabled){border-color:var(--line3);color:var(--tx);background:var(--s4);filter:none}
-button.ok{background:linear-gradient(135deg,#34d399,#22b183);color:#052b20;box-shadow:0 6px 16px -8px rgba(52,211,153,.8)}
+button.ok{background:linear-gradient(135deg,#34d399,var(--ok-deep));color:var(--ok-on);box-shadow:0 6px 16px -8px rgba(52,211,153,.8)}
 button.bad{background:var(--bad-bg);border:1px solid var(--bad-line);color:var(--bad);box-shadow:none}
-button.bad:hover:not(:disabled){background:#2f1720;filter:none}
-button.sm{padding:6.5px 12px;font-size:12px}
-button.xs{padding:3px 9px;font-size:10.5px;border-radius:6px;font-weight:600}
+button.bad:hover:not(:disabled){background:var(--bad-hover);filter:none}
+button.sm{padding:6.5px 12px;font-size:var(--fs-3)}
+button.xs{padding:3px 9px;font-size:var(--fs-1);border-radius:6px;font-weight:600}
 .row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
 select,.inp{
   background:var(--sunk);color:var(--tx);border:1px solid var(--line2);
-  border-radius:var(--r-sm);padding:8.5px 11px;font-size:12.8px;
+  border-radius:var(--r-sm);padding:8.5px 11px;font-size:var(--fs-3);
 }
 select:focus,.inp:focus{outline:none;border-color:var(--br)}
 
 /* 표 */
 .tw{overflow-x:auto;border-radius:var(--r-sm);border:1px solid var(--line)}
-table{width:100%;border-collapse:collapse;font-size:12.8px;min-width:640px}
+table{width:100%;border-collapse:collapse;font-size:var(--fs-3);min-width:640px}
 th{
-  text-align:left;color:var(--tx3);font-weight:700;font-size:10px;padding:9px 11px;
+  text-align:left;color:var(--tx3);font-weight:700;font-size:var(--fs-1);padding:9px 11px;
   border-bottom:1px solid var(--line);text-transform:uppercase;letter-spacing:.7px;
-  background:#10131a;position:sticky;top:0;z-index:1;
+  background:var(--s-head);position:sticky;top:0;z-index:1;
 }
 td{padding:11px;border-bottom:1px solid #171b23;vertical-align:top}
 tbody tr:last-child td{border-bottom:0}
 tbody tr{transition:background .12s var(--ease)}
-tbody tr:hover td{background:#151922}
+tbody tr:hover td{background:var(--s-hover)}
 tr.off td{opacity:.4}
 
 .tag{
-  display:inline-block;font-size:10.5px;padding:2.5px 9px;border-radius:99px;font-weight:600;
+  display:inline-block;font-size:var(--fs-1);padding:2.5px 9px;border-radius:99px;font-weight:600;
   background:var(--s3);border:1px solid var(--line2);color:var(--tx2);white-space:nowrap;
 }
-.tag.seg{background:var(--br-soft);border-color:var(--br-line);color:#a9c2ff}
+.tag.seg{background:var(--br-soft);border-color:var(--br-line);color:var(--br-ink3)}
 .tag.ok{background:var(--ok-bg);border-color:var(--ok-line);color:var(--ok)}
 .tag.warn{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn)}
 .tag.bad{background:var(--bad-bg);border-color:var(--bad-line);color:var(--bad)}
 .muted{color:var(--tx2)}
-.facts{font-size:11.5px;color:var(--tx2);margin:5px 0 0;padding-left:15px;line-height:1.65}
+.facts{font-size:var(--fs-2);color:var(--tx2);margin:5px 0 0;padding-left:15px;line-height:1.65}
 .site-in{
   width:100%;max-width:260px;background:var(--sunk);border:1px solid var(--line2);
-  color:var(--tx2);border-radius:6px;padding:5.5px 9px;font-size:11.5px;
+  color:var(--tx2);border-radius:6px;padding:5.5px 9px;font-size:var(--fs-2);
 }
 .site-in:focus{outline:none;border-color:var(--br);color:var(--tx)}
 input[type=checkbox]{accent-color:var(--br);width:15px;height:15px;cursor:pointer}
@@ -267,26 +317,26 @@ input[type=checkbox]{accent-color:var(--br);width:15px;height:15px;cursor:pointe
 }
 .msg.approved{border-color:var(--ok-line);box-shadow:var(--sh),inset 3px 0 0 var(--ok)}
 .msg.rejected{opacity:.45}
-.msg .to{font-size:12.5px;color:var(--tx2);margin-bottom:11px;display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.msg .to{font-size:var(--fs-3);color:var(--tx2);margin-bottom:11px;display:flex;align-items:center;gap:5px;flex-wrap:wrap}
 .msg input,.msg textarea{
   width:100%;background:var(--sunk);border:1px solid var(--line2);
-  color:var(--tx);border-radius:var(--r-sm);padding:11px 13px;font-size:13px;margin-bottom:9px;
+  color:var(--tx);border-radius:var(--r-sm);padding:11px 13px;font-size:var(--fs-4);margin-bottom:9px;
 }
 .msg textarea{min-height:190px;resize:vertical;line-height:1.85}
 .msg input:focus,.msg textarea:focus{outline:none;border-color:var(--br)}
 .checks{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 11px}
-.chk{font-size:10.5px;padding:2.5px 9px;border-radius:99px;border:1px solid;font-weight:600}
+.chk{font-size:var(--fs-1);padding:2.5px 9px;border-radius:99px;border:1px solid;font-weight:600}
 .chk.p{color:var(--ok);border-color:var(--ok-line);background:var(--ok-bg)}
 .chk.f{color:var(--bad);border-color:var(--bad-line);background:var(--bad-bg)}
 
 .banner{
-  background:var(--warn-bg);border:1px solid var(--warn-line);color:#e8c07d;
-  padding:12px 15px;border-radius:var(--r-sm);font-size:12.5px;margin-bottom:14px;
+  background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn-ink);
+  padding:12px 15px;border-radius:var(--r-sm);font-size:var(--fs-3);margin-bottom:14px;
 }
-.banner.info{background:#0f1728;border-color:var(--br-line);color:#a8c6f5}
-.banner code{background:rgba(0,0,0,.35);padding:1.5px 6px;border-radius:4px;font-size:11.5px}
+.banner.info{background:var(--s-banner-info);border-color:var(--br-line);color:var(--br-ink3)}
+.banner code{background:rgba(0,0,0,.35);padding:1.5px 6px;border-radius:4px;font-size:var(--fs-2)}
 
-.spin{color:#bcd0ff;font-size:13px;display:flex;align-items:center;gap:10px;font-weight:500}
+.spin{color:var(--br-ink2);font-size:var(--fs-4);display:flex;align-items:center;gap:10px;font-weight:500}
 .spin::before{
   content:"";width:14px;height:14px;border:2px solid rgba(109,139,255,.25);
   border-top-color:var(--br);border-radius:50%;animation:sp .7s linear infinite;flex:none;
@@ -297,8 +347,8 @@ input[type=checkbox]{accent-color:var(--br);width:15px;height:15px;cursor:pointe
 
 pre{
   white-space:pre-wrap;word-break:break-word;background:var(--sunk);border:1px solid var(--line);
-  border-radius:var(--r-sm);padding:14px;font-size:11.8px;line-height:1.75;overflow:auto;margin:10px 0 0;
-  font-family:ui-monospace,"Cascadia Code",Consolas,monospace;color:#c8d2e4;
+  border-radius:var(--r-sm);padding:14px;font-size:var(--fs-2);line-height:1.75;overflow:auto;margin:10px 0 0;
+  font-family:ui-monospace,"Cascadia Code",Consolas,monospace;color:var(--ink-code);
 }
 code{font-family:ui-monospace,Consolas,monospace;font-size:.92em}
 
@@ -309,36 +359,36 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.92em}
   box-shadow:none;transition:all .16s var(--ease);
 }
 .opt:hover{border-color:var(--line3);background:var(--s4);transform:none;filter:none}
-.opt.on{border-color:var(--br);background:linear-gradient(135deg,var(--br-soft),#111624);color:#dce8ff;
+.opt.on{border-color:var(--br);background:linear-gradient(135deg,var(--br-soft),var(--s-opt-on));color:var(--br-ink);
   box-shadow:0 0 0 1px var(--br-line),0 8px 20px -12px rgba(109,139,255,.8)}
-.opt b{display:block;font-size:13.5px;color:var(--tx);margin-bottom:3px;font-weight:650}
-.opt.on b{color:#eaf1ff}
-.opt span{font-size:11.5px;line-height:1.55;display:block}
+.opt b{display:block;font-size:var(--fs-4);color:var(--tx);margin-bottom:3px;font-weight:650}
+.opt.on b{color:var(--br-ink)}
+.opt span{font-size:var(--fs-2);line-height:1.55;display:block}
 .drop{
   border:1.5px dashed var(--line2);border-radius:var(--r);padding:22px;text-align:center;
-  color:var(--tx2);font-size:12.5px;cursor:pointer;transition:all .16s var(--ease);
+  color:var(--tx2);font-size:var(--fs-3);cursor:pointer;transition:all .16s var(--ease);
 }
 .drop:hover{border-color:var(--br);color:var(--tx);background:rgba(109,139,255,.05)}
 
 /* ── 문구 스튜디오 ────────────────────────────────────────── */
 .kwgroup{margin-bottom:15px}
 .kwgroup .kh{
-  font-size:11px;color:var(--tx2);font-weight:650;margin-bottom:7px;
+  font-size:var(--fs-2);color:var(--tx2);font-weight:650;margin-bottom:7px;
   display:flex;align-items:center;gap:8px;flex-wrap:wrap;
 }
-.kwgroup .kh em{font-style:normal;color:var(--tx3);font-size:10.5px;font-weight:400}
+.kwgroup .kh em{font-style:normal;color:var(--tx3);font-size:var(--fs-1);font-weight:400}
 .chips{display:flex;flex-wrap:wrap;gap:7px}
 .chip{
-  font-size:11.8px;padding:6px 12px;border-radius:99px;cursor:pointer;user-select:none;
+  font-size:var(--fs-2);padding:6px 12px;border-radius:99px;cursor:pointer;user-select:none;
   background:var(--s3);border:1px solid var(--line2);color:var(--tx2);
   transition:all .14s var(--ease);line-height:1.4;
 }
 .chip:hover{border-color:var(--line3);color:var(--tx);transform:translateY(-1px)}
 .chip.on{
-  background:linear-gradient(135deg,var(--br),#5f7ef5);border-color:transparent;color:#fff;font-weight:600;
+  background:linear-gradient(135deg,var(--br),var(--br-grad));border-color:transparent;color:#fff;font-weight:600;
   box-shadow:0 6px 16px -8px rgba(109,139,255,.9);
 }
-.chip.tone.on{background:linear-gradient(135deg,#22b183,var(--ok));color:#052b20;box-shadow:0 6px 16px -8px rgba(52,211,153,.8)}
+.chip.tone.on{background:linear-gradient(135deg,var(--ok-deep),var(--ok));color:var(--ok-on);box-shadow:0 6px 16px -8px rgba(52,211,153,.8)}
 
 .copygrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
 .copy{
@@ -347,15 +397,15 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.92em}
 }
 .copy::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:0 3px 3px 0;background:var(--line2)}
 .copy:hover{border-color:var(--line3);background:var(--s4)}
-.copy.on{border-color:var(--br);background:linear-gradient(135deg,var(--br-soft),#12161f)}
+.copy.on{border-color:var(--br);background:linear-gradient(135deg,var(--br-soft),var(--s-copy-on))}
 .copy.on::before{background:linear-gradient(180deg,var(--br),var(--br2))}
-.copy .kind{font-size:9.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--tx3);font-weight:700}
-.copy .txt{font-size:13px;margin:5px 0 6px;line-height:1.55;color:var(--tx);font-weight:500}
-.copy.on .txt{color:#eaf1ff}
-.copy .why{font-size:10.5px;color:var(--tx3);display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.copy .kind{font-size:var(--fs-0);letter-spacing:.7px;text-transform:uppercase;color:var(--tx3);font-weight:700}
+.copy .txt{font-size:var(--fs-4);margin:5px 0 6px;line-height:1.55;color:var(--tx);font-weight:500}
+.copy.on .txt{color:var(--br-ink)}
+.copy .why{font-size:var(--fs-1);color:var(--tx3);display:flex;gap:7px;align-items:center;flex-wrap:wrap}
 .copy .mk{
   position:absolute;right:10px;top:10px;width:17px;height:17px;border-radius:5px;
-  border:1.5px solid var(--line2);display:grid;place-items:center;font-size:11px;color:transparent;
+  border:1.5px solid var(--line2);display:grid;place-items:center;font-size:var(--fs-2);color:transparent;
 }
 .copy.on .mk{border-color:var(--br);background:var(--br);color:#fff}
 
@@ -368,41 +418,41 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.92em}
 }
 .console .bar2{
   display:flex;align-items:center;gap:10px;padding:0 14px;height:var(--console-h);
-  cursor:pointer;font-size:11.5px;color:var(--tx2);flex:none;user-select:none;
+  cursor:pointer;font-size:var(--fs-2);color:var(--tx2);flex:none;user-select:none;
 }
 .console .bar2:hover{color:var(--tx)}
-.console .bar2 .caret{transition:transform .2s var(--ease);font-size:9px;color:var(--tx3)}
+.console .bar2 .caret{transition:transform .2s var(--ease);font-size:var(--fs-0);color:var(--tx3)}
 .console.open .bar2 .caret{transform:rotate(180deg)}
 .console .bar2 b{font-weight:650;color:var(--tx);letter-spacing:-.1px}
 .console .last{
   flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  color:var(--tx3);font-family:ui-monospace,Consolas,monospace;font-size:10.8px;
+  color:var(--tx3);font-family:ui-monospace,Consolas,monospace;font-size:var(--fs-1);
 }
 .console .body2{display:none;border-top:1px solid var(--line);flex:1;min-height:0;flex-direction:column}
 .console.open .body2{display:flex}
 .console .tools{display:flex;gap:7px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .console .logs{
   flex:1;overflow-y:auto;padding:8px 14px 14px;
-  font-family:ui-monospace,"Cascadia Code",Consolas,monospace;font-size:11.3px;line-height:1.7;
+  font-family:ui-monospace,"Cascadia Code",Consolas,monospace;font-size:var(--fs-2);line-height:1.7;
 }
 .lg{display:grid;grid-template-columns:62px 62px 1fr;gap:10px;padding:1.5px 0;border-bottom:1px solid rgba(255,255,255,.025)}
-.lg .tm{color:#4a5364}
+.lg .tm{color:var(--tx5)}
 .lg .tg{color:var(--tx3);overflow:hidden;text-overflow:ellipsis}
-.lg .mg{color:#b9c4d6;word-break:break-word;white-space:pre-wrap}
-.lg .mt{color:#5b6577}
-.lg.ok .mg{color:#6ee7b7}
-.lg.error .mg{color:#fda4af}
-.lg.warn .mg{color:#fcd34d}
-.lg.ai .mg{color:#a5b4fc}
-.lg.net .mg{color:#7dd3fc}
-.lg.ui .tg{color:#8b93a5}
+.lg .mg{color:var(--ink-log);word-break:break-word;white-space:pre-wrap}
+.lg .mt{color:var(--tx4)}
+.lg.ok .mg{color:var(--ok-ink)}
+.lg.error .mg{color:var(--bad-ink)}
+.lg.warn .mg{color:var(--warn-ink)}
+.lg.ai .mg{color:var(--ai-ink)}
+.lg.net .mg{color:var(--info-ink)}
+.lg.ui .tg{color:var(--tx3)}
 .filt{
-  font-size:10.5px;padding:3px 9px;border-radius:99px;cursor:pointer;
+  font-size:var(--fs-1);padding:3px 9px;border-radius:99px;cursor:pointer;
   background:var(--s3);border:1px solid var(--line2);color:var(--tx3);
 }
-.filt.on{background:var(--br-soft);border-color:var(--br-line);color:#a9c2ff}
+.filt.on{background:var(--br-soft);border-color:var(--br-line);color:var(--br-ink3)}
 .pill{
-  font-size:9.5px;font-weight:700;padding:1.5px 7px;border-radius:99px;letter-spacing:.3px;
+  font-size:var(--fs-0);font-weight:700;padding:1.5px 7px;border-radius:99px;letter-spacing:.3px;
   background:var(--s3);border:1px solid var(--line2);color:var(--tx3);
 }
 .pill.live{background:var(--ok-bg);border-color:var(--ok-line);color:var(--ok)}
@@ -411,8 +461,8 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.92em}
 /* ── 툴팁 ─────────────────────────────────────────────────── */
 .tip{
   position:fixed;z-index:100;max-width:340px;pointer-events:none;
-  background:#171c26;border:1px solid var(--line3);border-radius:var(--r-sm);
-  padding:9px 12px;font-size:11.8px;line-height:1.6;color:var(--tx);box-shadow:var(--sh-lg);
+  background:var(--s-tip);border:1px solid var(--line3);border-radius:var(--r-sm);
+  padding:9px 12px;font-size:var(--fs-2);line-height:1.6;color:var(--tx);box-shadow:var(--sh-lg);
 }
 
 /* ── 반응형 — 좁은 화면에서도 메뉴는 사라지지 않는다 ────────── */
@@ -437,7 +487,7 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.92em}
   main{padding:20px 16px calc(var(--console-h) + 40px)}
   .flow{grid-template-columns:repeat(4,1fr)}
   .flow .cell:nth-child(5)::before,.flow .cell:nth-child(1)::before{display:none}
-  .head h2{font-size:21px}
+  .head h2{font-size:var(--fs-7)}
   .copygrid{grid-template-columns:1fr}
 }
 @media (prefers-reduced-motion:reduce){
@@ -446,7 +496,7 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.92em}
 
 /* ── 처리 흐름도 ─────────────────────────────────────────── */
 .fchain{display:flex;align-items:stretch;gap:6px;overflow-x:auto;padding-bottom:4px}
-.farrow{display:grid;place-items:center;color:var(--tx3);font-size:13px;flex:none;padding:0 1px}
+.farrow{display:grid;place-items:center;color:var(--tx3);font-size:var(--fs-4);flex:none;padding:0 1px}
 .fnode{
   flex:1 1 0;min-width:132px;border:1px solid var(--line2);border-radius:10px;
   padding:10px 11px;background:var(--s2);transition:all .2s var(--ease);cursor:pointer;
@@ -455,11 +505,11 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.92em}
 .fn-top{display:flex;align-items:center;gap:7px}
 .fn-num{
   width:20px;height:20px;border-radius:50%;flex:none;display:grid;place-items:center;
-  font-size:10.5px;font-weight:700;border:1.5px solid var(--line2);color:var(--tx3);background:var(--s1);
+  font-size:var(--fs-1);font-weight:700;border:1.5px solid var(--line2);color:var(--tx3);background:var(--s1);
 }
-.fn-lb{font-size:12.5px;font-weight:650;letter-spacing:-.2px}
-.fn-comp{font-size:10px;color:var(--tx3);margin-top:5px;line-height:1.5}
-.fn-msg{font-size:10.5px;margin-top:6px;padding-top:6px;border-top:1px solid var(--line);color:var(--tx2)}
+.fn-lb{font-size:var(--fs-3);font-weight:650;letter-spacing:-.2px}
+.fn-comp{font-size:var(--fs-1);color:var(--tx3);margin-top:5px;line-height:1.5}
+.fn-msg{font-size:var(--fs-1);margin-top:6px;padding-top:6px;border-top:1px solid var(--line);color:var(--tx2)}
 
 .fnode.done{border-color:var(--ok-line);background:linear-gradient(180deg,var(--ok-bg),var(--s2))}
 .fnode.done .fn-num{border-color:var(--ok-line);background:var(--ok-bg);color:var(--ok)}
@@ -473,8 +523,8 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.92em}
   border-color:var(--br);background:linear-gradient(180deg,var(--br-soft),var(--s2));
   box-shadow:0 0 0 3px rgba(109,139,255,.16);
 }
-.fnode.run .fn-num{border-color:var(--br);color:#cfe0ff;animation:pulse 1.4s infinite}
-.fnode.run .fn-lb{color:#dce8ff}
+.fnode.run .fn-num{border-color:var(--br);color:var(--br-ink2);animation:pulse 1.4s infinite}
+.fnode.run .fn-lb{color:var(--br-ink)}
 
 .fnode.skip{border-color:var(--warn-line);background:linear-gradient(180deg,var(--warn-bg),var(--s2))}
 .fnode.skip .fn-num{border-color:var(--warn-line);background:var(--warn-bg);color:var(--warn)}
@@ -507,19 +557,19 @@ main>.flow{margin-bottom:var(--sp-out)}
    지금은 사이드바 7단계가 전부 초록 체크라 "다 끝났다"고 말한다.
    실제로는 작업 중인데도 그렇다. 완료는 조용히, 지금 할 일만 눈에 띄게. */
 .step.done .num{
-  border-color:var(--line2);background:var(--s1);color:#586275;
+  border-color:var(--line2);background:var(--s1);color:var(--tx4);
   box-shadow:none;font-weight:600;
 }
 .step.done .lb{color:var(--tx2);font-weight:500}
-.step.done .sb{color:#4a5364}
+.step.done .sb{color:var(--tx5)}
 /* 다음에 할 단계는 확실히 도드라지게 */
 .step.ready{background:rgba(109,139,255,.06)}
-.step.ready .lb{color:#dbe6ff}
+.step.ready .lb{color:var(--br-ink)}
 .step.ready .num{box-shadow:0 0 0 4px rgba(109,139,255,.16)}
 
 /* 처리 흐름도도 같은 규율. 방금 돌린 결과(ok/fail)만 색을 갖는다. */
 .fnode.done{border-color:var(--line);background:var(--s2)}
-.fnode.done .fn-num{border-color:var(--line2);background:var(--s1);color:#586275}
+.fnode.done .fn-num{border-color:var(--line2);background:var(--s1);color:var(--tx4)}
 .fnode.done .fn-msg{color:var(--tx3)}
 
 /* ── ④ 같은 정보를 세 번 보여 주지 않는다 ─────────────────────────
@@ -538,8 +588,8 @@ body[data-view="stats"] .panel>div[style*="minmax(112px"]{
 body[data-view="stats"] .panel>div[style*="minmax(112px"]>.panel{
   padding:10px 12px!important;box-shadow:none;background:var(--s3);
 }
-body[data-view="stats"] .panel>div[style*="minmax(112px"] div[style*="font-size:23px"]{
-  font-size:19px!important;
+body[data-view="stats"] .panel>div[style*="minmax(112px"] div[style*="font-size:var(--fs-8)"]{
+  font-size:var(--fs-7)!important;
 }
 
 /* ── ⑥ 긴 표 — 머리글이 패널 안에서 따라오게 ──────────────────────
@@ -547,7 +597,7 @@ body[data-view="stats"] .panel>div[style*="minmax(112px"] div[style*="font-size:
    표 자체를 스크롤 영역으로 만들어야 sticky 머리글이 뜻을 갖는다. */
 .tw{max-height:min(62vh,680px);overflow:auto}
 .tw table{min-width:720px}
-th{background:linear-gradient(180deg,#121620,#10131a);box-shadow:0 1px 0 var(--line)}
+th{background:linear-gradient(180deg,var(--s-head),var(--s-head));box-shadow:0 1px 0 var(--line)}
 /* 선택된 줄은 눈에 남아야 한다 */
 tbody tr:has(input.pick:checked) td{background:rgba(109,139,255,.07)}
 tbody tr:has(input.pick:checked) td:first-child{box-shadow:inset 2px 0 0 var(--br)}
@@ -556,7 +606,7 @@ tbody tr:has(input.pick:checked) td:first-child{box-shadow:inset 2px 0 0 var(--b
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 
 /* ── ⑦ 막대 — 트랙과 채움이 확실히 갈리게 ────────────────────────── */
-.barwrap{background:#0b0e14;box-shadow:inset 0 0 0 1px var(--line)}
+.barwrap{background:var(--s-track);box-shadow:inset 0 0 0 1px var(--line)}
 
 /* ── ⑧ 툴팁이 가리키는 것을 덮지 않게 ─────────────────────────────
    사이드바 항목에 올리면 툴팁이 메뉴를 덮어 무엇을 고르는지 안 보였다. */

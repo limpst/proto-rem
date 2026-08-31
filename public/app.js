@@ -605,11 +605,25 @@ const PRIMARY = {
       <button class="ghost" data-act="enrich" ${x.site ? '' : 'disabled'}
         title="${x.site ? T.enrich : '홈페이지 주소가 하나도 없어 실행할 수 없습니다. STEP 2 에서 먼저 확보하세요.'}">홈페이지 새로 읽기</button>
       <button class="ghost" data-act="prompt" title="${T.prompt}">AI 에게 보낼 지시문 미리보기</button></div>`,
-  segment: x => `<div class="row">
-      <button data-act="segment" title="${T.segment}">고객군 분류 (규칙)</button>
-      <button class="ghost" data-act="segmentai" title="${T.segmentai}">AI 로 마저 분류</button>
+  segment: x => {
+    const cards = S.cards ?? [];
+    const kept = cards.filter(c => ['manual', 'ai', 'fallback'].includes(c.segmentSource)).length;
+    const unc = cards.filter(c => !c.excluded && c.segmentId === 'unclassified').length;
+    const aiDone = cards.filter(c => c.segmentAi).length;
+    return `<div class="row">
+      <button data-act="segment"
+        title="회사명 키워드로 분류합니다. 사람이 직접 고른 고객군과 AI 판단은 그대로 둡니다.">고객군 분류 (규칙)</button>
+      <button class="ghost" data-act="segmentai" ${unc ? '' : 'disabled'}
+        title="${unc ? `미분류 ${unc}건만 AI 에게 물어봅니다. 이미 AI 가 판단한 건은 다시 묻지 않습니다.`
+          : '미분류가 없습니다. AI 에게 물어볼 것이 없습니다.'}">
+        AI 로 마저 분류${unc ? ` (${unc}건)` : ''}</button>
       <button class="ghost" data-act="interests" ${x.usable.length ? '' : 'disabled'} title="${T.interests}">관심사 추정</button>
-      ${x.classified ? '<span class="muted" style="font-size:12px">아래 표에서 체크박스로 대상을 고르세요</span>' : ''}</div>`,
+      <button class="ghost" data-act="segment-force"
+        title="사람이 고른 것까지 포함해 전부 규칙으로 다시 판정합니다. 수동 지정이 사라집니다.">전부 다시 판정</button>
+      ${kept ? `<span class="tag ok" title="사람이 고르거나 AI 가 판단한 결과는 규칙 분류가 덮지 않습니다">판단 ${kept}건 보호</span>` : ''}
+      ${aiDone ? `<span class="tag" title="이미 AI 가 본 명함입니다. 다시 묻지 않습니다">AI 판단 ${aiDone}건</span>` : ''}
+      ${x.classified ? '<span class="muted" style="font-size:12px">아래 표에서 체크박스로 대상을 고르세요</span>' : ''}</div>`;
+  },
   generate: x => {
     const done = (S.cards ?? []).filter(c => (S.selection ?? []).includes(c.id) && c.message).length;
     const todo = x.selected - done;
@@ -1947,7 +1961,19 @@ function bind() {
       return r;
     },
     segment: () => api('/api/segment', {}),
-    segmentai: () => api('/api/segment', { useAi: true }),
+    'segment-force': async () => {
+      const n = (S.cards ?? []).filter(c => c.segmentSource === 'manual').length;
+      if (n && !confirm(`전부 규칙으로 다시 판정합니다.
+직접 고르신 고객군 ${n}건이 회사명 기준으로 덮어써집니다.
+
+계속할까요?`)) return null;
+      return api('/api/segment', { force: true });
+    },
+    segmentai: async () => {
+      const r = await api('/api/segment', { useAi: true });
+      if (r?.nothingToDo) { toast('AI 에게 물어볼 미분류 명함이 없습니다.'); return null; }
+      return r;
+    },
     interests: () => api('/api/interests', {}),
     source: () => api('/api/source-profile', {}),
     resolvesites: async () => { await runJob('/api/resolve-sites', {}, '홈페이지 찾는 중'); return null; },
