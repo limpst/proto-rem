@@ -210,6 +210,24 @@ function toast(msg, bad) {
   alert(msg);
 }
 
+/* ── 화면 테마 ────────────────────────────────────────────────────
+   기본은 시스템 설정을 따른다. 사람마다 낮밤·모니터가 다르므로
+   하나를 강요하지 않되, 원하면 고정할 수 있게 둔다. */
+const THEMES = ['system', 'light', 'dark'];
+const themeNow = () => document.documentElement.dataset.theme || 'system';
+const themeLabel = () => ({ system: '시스템', light: '밝게', dark: '어둡게' })[themeNow()];
+
+function cycleTheme() {
+  const next = THEMES[(THEMES.indexOf(themeNow()) + 1) % THEMES.length];
+  if (next === 'system') {
+    delete document.documentElement.dataset.theme;
+    try { localStorage.removeItem('pr-theme'); } catch { /* 저장소가 막혀도 이번 세션은 바뀐다 */ }
+  } else {
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem('pr-theme', next); } catch { /* 위와 같음 */ }
+  }
+}
+
 const seg = id => (S?.segments ?? []).find(s => s.id === id);
 
 const VIA = {
@@ -438,8 +456,13 @@ function draw(loading) {
     <dt>저장</dt><dd title="${esc(S.storage?.note ?? '')}${S.storage?.stateDir ? ' · ' + esc(S.storage.stateDir) : ''}"
       style="color:${S.storage ? (S.storage.persistent ? 'var(--ok)' : 'var(--warn)') : 'var(--tx3)'}">
       ${S.storage ? (S.storage.persistent ? '영구' : '⚠ 배포시 초기화') : '-'}</dd>
+    <dt>화면</dt><dd><button class="ghost xs" id="theme"
+      title="${T.theme}">${themeLabel()}</button></dd>
     ${S.auth?.enabled ? `<dt>접속</dt><dd><button class="ghost xs" id="logout"
       title="${T.logout}">로그아웃</button></dd>` : ''}`;
+
+  const th = $('#theme');
+  if (th) th.onclick = () => { cycleTheme(); render(); };
 
   const lo = $('#logout');
   if (lo) lo.onclick = async () => { await api('/api/logout', {}); location.replace('/login.html'); };
@@ -541,6 +564,7 @@ const T = {
   delcard: '이 명함을 목록에서 완전히 지웁니다. 되돌릴 수 없습니다.',
   topcard: '이 명함을 목록 맨 위로 올립니다. 순서는 저장돼 다음에 열어도 그대로입니다.',
   logout: '이 브라우저의 접속을 끊고 로그인 화면으로 돌아갑니다. 공용 PC 에서는 자리를 뜨기 전에 눌러 주세요.',
+  theme: '화면 밝기를 바꿉니다. 시스템 → 밝게 → 어둡게 순서로 돌아갑니다. 시스템은 OS 설정을 그대로 따릅니다.',
   dequeue: '이 건을 발송 큐에서 뺍니다. 승인 상태와 문안은 그대로 남고, [발송 큐에 넣기] 를 다시 누르면 들어갑니다.',
   dequeueAll: '큐에 올라간 건을 전부 뺍니다. 이미 발송(SENT)된 건은 건드리지 않습니다.',
   sendone: '이 한 건만 지금 바로 보냅니다. 연습모드(DRY_RUN)면 실제로 나가지 않고, 야간 차단 같은 안전장치는 그대로 걸립니다.',

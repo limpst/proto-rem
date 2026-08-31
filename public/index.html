@@ -89,6 +89,11 @@
   --s-banner-info:#0f1728;
 
   /* ── 상태 잉크 ─────────────────────────────────────────────────── */
+  --s-console:rgba(10,12,16,.94);
+  --s-step-active2:rgba(20,29,56,.35);
+  --line-log:rgba(255,255,255,.025);
+  --code-bg:rgba(0,0,0,.35);
+  --line-row:#171b23;      /* 표 줄 구분선 — line 보다 한 단 더 흐리다 */
   --ok-ink:#6ee7b7; --ok-deep:#22b183; --ok-on:#052b20;
   --warn-ink:#fcd34d;
   --bad-ink:#fda4af; --bad-hover:#2f1720;
@@ -158,7 +163,7 @@ aside{
 }
 .step:hover{background:var(--s-hover)}
 .step:active{transform:scale(.985)}
-.step.active{background:linear-gradient(90deg,var(--br-soft),rgba(20,29,56,.35));box-shadow:inset 0 0 0 1px var(--br-line)}
+.step.active{background:linear-gradient(90deg,var(--br-soft),var(--s-step-active2));box-shadow:inset 0 0 0 1px var(--br-line)}
 .step.active::after{
   content:"";position:absolute;left:0;top:9px;bottom:9px;width:3px;border-radius:0 3px 3px 0;
   background:linear-gradient(180deg,var(--br),var(--br2));
@@ -183,7 +188,13 @@ aside{
 .dot{width:6px;height:6px;border-radius:50%;background:var(--br);flex:none;animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(109,139,255,.5)}50%{box-shadow:0 0 0 5px rgba(109,139,255,0)}}
 
-.sidefoot{border-top:1px solid var(--line);padding:12px 16px 14px;font-size:var(--fs-2)}
+/* 하단 로그 콘솔이 고정으로 떠 있어 사이드바 맨 아래를 덮는다.
+   덮이면 [화면]·[로그아웃] 버튼을 아예 누를 수 없다. 콘솔 높이만큼 비워 둔다. */
+.sidefoot{
+  border-top:1px solid var(--line);
+  padding:12px 16px calc(14px + var(--console-h));
+  font-size:var(--fs-2);
+}
 .sidefoot dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 10px;align-items:center}
 .sidefoot dt{color:var(--tx3);font-size:var(--fs-1)}
 .sidefoot dd{margin:0;text-align:right;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -212,7 +223,7 @@ main{
 .flow .cell .v{font-size:var(--fs-7);font-weight:750;letter-spacing:-.8px;line-height:1.15;font-variant-numeric:tabular-nums}
 .flow .cell .k{font-size:var(--fs-1);color:var(--tx3);margin-top:3px;letter-spacing:.2px}
 .flow .cell.zero .v{color:var(--tx5)}
-.flow .cell.good .v{background:linear-gradient(135deg,#eaeef6,var(--br-glow));-webkit-background-clip:text;background-clip:text;color:transparent}
+.flow .cell.good .v{background:linear-gradient(135deg,var(--tx),var(--br-glow));-webkit-background-clip:text;background-clip:text;color:transparent}
 
 /* 다음 할 일 */
 .todo{
@@ -267,7 +278,7 @@ button:active:not(:disabled){transform:translateY(0)}
 button:disabled{opacity:.3;cursor:not-allowed;box-shadow:none;filter:grayscale(.4)}
 button.ghost{background:var(--s3);border:1px solid var(--line2);color:var(--tx2);box-shadow:none}
 button.ghost:hover:not(:disabled){border-color:var(--line3);color:var(--tx);background:var(--s4);filter:none}
-button.ok{background:linear-gradient(135deg,#34d399,var(--ok-deep));color:var(--ok-on);box-shadow:0 6px 16px -8px rgba(52,211,153,.8)}
+button.ok{background:linear-gradient(135deg,var(--ok),var(--ok-deep));color:var(--ok-on);box-shadow:0 6px 16px -8px rgba(52,211,153,.8)}
 button.bad{background:var(--bad-bg);border:1px solid var(--bad-line);color:var(--bad);box-shadow:none}
 button.bad:hover:not(:disabled){background:var(--bad-hover);filter:none}
 button.sm{padding:6.5px 12px;font-size:var(--fs-3)}
@@ -287,7 +298,7 @@ th{
   border-bottom:1px solid var(--line);text-transform:uppercase;letter-spacing:.7px;
   background:var(--s-head);position:sticky;top:0;z-index:1;
 }
-td{padding:11px;border-bottom:1px solid #171b23;vertical-align:top}
+td{padding:11px;border-bottom:1px solid var(--line-row);vertical-align:top}
 tbody tr:last-child td{border-bottom:0}
 tbody tr{transition:background .12s var(--ease)}
 tbody tr:hover td{background:var(--s-hover)}
@@ -334,7 +345,7 @@ input[type=checkbox]{accent-color:var(--br);width:15px;height:15px;cursor:pointe
   padding:12px 15px;border-radius:var(--r-sm);font-size:var(--fs-3);margin-bottom:14px;
 }
 .banner.info{background:var(--s-banner-info);border-color:var(--br-line);color:var(--br-ink3)}
-.banner code{background:rgba(0,0,0,.35);padding:1.5px 6px;border-radius:4px;font-size:var(--fs-2)}
+.banner code{background:var(--code-bg);padding:1.5px 6px;border-radius:4px;font-size:var(--fs-2)}
 
 .spin{color:var(--br-ink2);font-size:var(--fs-4);display:flex;align-items:center;gap:10px;font-weight:500}
 .spin::before{
@@ -412,7 +423,7 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.92em}
 /* ── 하단 로그 콘솔 ───────────────────────────────────────── */
 .console{
   position:fixed;left:0;right:0;bottom:0;z-index:50;
-  background:rgba(10,12,16,.94);backdrop-filter:blur(14px);
+  background:var(--s-console);backdrop-filter:blur(14px);
   border-top:1px solid var(--line2);box-shadow:var(--sh-lg);
   display:flex;flex-direction:column;max-height:70vh;
 }
@@ -435,7 +446,7 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.92em}
   flex:1;overflow-y:auto;padding:8px 14px 14px;
   font-family:ui-monospace,"Cascadia Code",Consolas,monospace;font-size:var(--fs-2);line-height:1.7;
 }
-.lg{display:grid;grid-template-columns:62px 62px 1fr;gap:10px;padding:1.5px 0;border-bottom:1px solid rgba(255,255,255,.025)}
+.lg{display:grid;grid-template-columns:62px 62px 1fr;gap:10px;padding:1.5px 0;border-bottom:1px solid var(--line-log)}
 .lg .tm{color:var(--tx5)}
 .lg .tg{color:var(--tx3);overflow:hidden;text-overflow:ellipsis}
 .lg .mg{color:var(--ink-log);word-break:break-word;white-space:pre-wrap}
@@ -471,7 +482,7 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.92em}
   aside{
     position:sticky;top:0;height:auto;max-height:none;z-index:40;
     border-right:0;border-bottom:1px solid var(--line2);
-    background:rgba(12,14,20,.95);backdrop-filter:blur(12px);
+    background:var(--s-console);backdrop-filter:blur(12px);
   }
   .brand{padding:12px 14px}
   .nav{padding:0 10px 10px}
@@ -640,8 +651,188 @@ select:focus,.inp:focus,.site-in:focus,.msg input:focus,.msg textarea:focus{
   .panel,.msg,.todo{border-color:#ccc;background:#fff;box-shadow:none;break-inside:avoid}
   .tw{max-height:none;overflow:visible}
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   라이트 모드 — 토큰 한 벌만 다시 정의한다. 규칙은 한 줄도 건드리지 않는다.
+   색을 전부 토큰으로 모아 둔 덕에 이 블록 하나로 전 화면이 따라온다.
+   대비는 눈이 아니라 계산으로 확인했다(본문 7:1, 보조 4.5:1, 흐린 라벨 3:1).
+
+   기본은 OS 설정을 따르고, 사이드바의 토글로 덮어쓸 수 있다.
+   ══════════════════════════════════════════════════════════════════ */
+:root{color-scheme:dark}
+@media (prefers-color-scheme:light){
+  :root:not([data-theme="dark"]){
+    color-scheme:light;
+    --bg:#f4f6f9;
+    --s1:#ffffff;
+    --s2:#ffffff;
+    --s3:#f4f6fa;
+    --s4:#e9edf4;
+    --sunk:#f1f3f7;
+    --line:#e2e6ee;
+    --line2:#cfd6e2;
+    --line3:#aab4c6;
+    --line-row:#edf0f5;
+    --tx:#151922;
+    --tx2:#525c70;
+    --tx3:#6f7889;
+    --tx4:#7b8496;
+    --tx5:#98a1b2;
+    --ink-code:#2c3444;
+    --ink-log:#333b4c;
+    --br:#3151d8;
+    --br2:#0d7fa8;
+    --br-soft:#eef2ff;
+    --br-line:#c5d1f6;
+    --br-ink:#1b2f7a;
+    --br-ink2:#26409c;
+    --br-ink3:#2f4bb5;
+    --br-grad:#4763e0;
+    --br-glow:#3151d8;
+    --on-brand:#ffffff;
+    --s-side1:#ffffff;
+    --s-side2:#fbfcfe;
+    --s-head:#f1f4f9;
+    --s-hover:#f2f5fa;
+    --s-tip:#1f2532;
+    --s-track:#e7ebf2;
+    --s-bar:#c8d0dd;
+    --s-bar2:#adb7c8;
+    --s-flow2:#fbfcfe;
+    --s-step-active:#e8eeff;
+    --s-todo1:#eef3ff;
+    --s-todo2:#f7f9ff;
+    --s-todo-w1:#fdf6e6;
+    --s-todo-w2:#fffbf2;
+    --s-todo-g1:#e9f8f1;
+    --s-todo-g2:#f4fbf8;
+    --s-copy-on:#f5f8ff;
+    --s-opt-on:#f3f7ff;
+    --s-banner-info:#eef3ff;
+    --ok:#0b7a52;
+    --ok-bg:#e7f7f0;
+    --ok-line:#a5dcc5;
+    --ok-ink:#0b7a52;
+    --ok-deep:#0a6a47;
+    --ok-on:#ffffff;
+    --warn:#8a5a00;
+    --warn-bg:#fdf3e0;
+    --warn-line:#e8cf98;
+    --warn-ink:#8a5a00;
+    --bad:#b31b38;
+    --bad-bg:#fdeef1;
+    --bad-line:#f0bcc7;
+    --bad-ink:#b31b38;
+    --bad-hover:#fbe2e7;
+    --info-ink:#0b6f96;
+    --ai-ink:#3b4ec2;
+    --s-console:rgba(255,255,255,.96);
+    --s-step-active2:rgba(232,238,255,.55);
+    --line-log:rgba(0,0,0,.05);
+    --code-bg:rgba(0,0,0,.06);
+  }
+}
+:root[data-theme="light"]{
+  color-scheme:light;
+    --bg:#f4f6f9;
+    --s1:#ffffff;
+    --s2:#ffffff;
+    --s3:#f4f6fa;
+    --s4:#e9edf4;
+    --sunk:#f1f3f7;
+    --line:#e2e6ee;
+    --line2:#cfd6e2;
+    --line3:#aab4c6;
+    --line-row:#edf0f5;
+    --tx:#151922;
+    --tx2:#525c70;
+    --tx3:#6f7889;
+    --tx4:#7b8496;
+    --tx5:#98a1b2;
+    --ink-code:#2c3444;
+    --ink-log:#333b4c;
+    --br:#3151d8;
+    --br2:#0d7fa8;
+    --br-soft:#eef2ff;
+    --br-line:#c5d1f6;
+    --br-ink:#1b2f7a;
+    --br-ink2:#26409c;
+    --br-ink3:#2f4bb5;
+    --br-grad:#4763e0;
+    --br-glow:#3151d8;
+    --on-brand:#ffffff;
+    --s-side1:#ffffff;
+    --s-side2:#fbfcfe;
+    --s-head:#f1f4f9;
+    --s-hover:#f2f5fa;
+    --s-tip:#1f2532;
+    --s-track:#e7ebf2;
+    --s-bar:#c8d0dd;
+    --s-bar2:#adb7c8;
+    --s-flow2:#fbfcfe;
+    --s-step-active:#e8eeff;
+    --s-todo1:#eef3ff;
+    --s-todo2:#f7f9ff;
+    --s-todo-w1:#fdf6e6;
+    --s-todo-w2:#fffbf2;
+    --s-todo-g1:#e9f8f1;
+    --s-todo-g2:#f4fbf8;
+    --s-copy-on:#f5f8ff;
+    --s-opt-on:#f3f7ff;
+    --s-banner-info:#eef3ff;
+    --ok:#0b7a52;
+    --ok-bg:#e7f7f0;
+    --ok-line:#a5dcc5;
+    --ok-ink:#0b7a52;
+    --ok-deep:#0a6a47;
+    --ok-on:#ffffff;
+    --warn:#8a5a00;
+    --warn-bg:#fdf3e0;
+    --warn-line:#e8cf98;
+    --warn-ink:#8a5a00;
+    --bad:#b31b38;
+    --bad-bg:#fdeef1;
+    --bad-line:#f0bcc7;
+    --bad-ink:#b31b38;
+    --bad-hover:#fbe2e7;
+    --info-ink:#0b6f96;
+    --ai-ink:#3b4ec2;
+    --s-console:rgba(255,255,255,.96);
+    --s-step-active2:rgba(232,238,255,.55);
+    --line-log:rgba(0,0,0,.05);
+    --code-bg:rgba(0,0,0,.06);
+}
+/* 밝은 바탕에서는 배경 광원과 그림자를 덜어낸다. 그대로 두면 지저분해진다. */
+@media (prefers-color-scheme:light){
+  :root:not([data-theme="dark"]) body::before{
+    background:radial-gradient(900px 500px at 12% -8%, rgba(49,81,216,.05), transparent 60%);
+  }
+}
+:root[data-theme="light"] body::before{
+  background:radial-gradient(900px 500px at 12% -8%, rgba(49,81,216,.05), transparent 60%);
+}
+@media (prefers-color-scheme:light){
+  :root:not([data-theme="dark"]){
+    --sh:0 1px 2px rgba(16,24,40,.05), 0 8px 20px -12px rgba(16,24,40,.16);
+    --sh-lg:0 20px 48px -18px rgba(16,24,40,.28);
+  }
+}
+:root[data-theme="light"]{
+  --sh:0 1px 2px rgba(16,24,40,.05), 0 8px 20px -12px rgba(16,24,40,.16);
+  --sh-lg:0 20px 48px -18px rgba(16,24,40,.28);
+}
+/* 툴팁은 밝은 화면에서도 어두운 채로 둔다 — 본문과 겹쳐 보이지 않게 */
+:root[data-theme="light"] .tip,
+:root:not([data-theme="dark"]) .tip{color:var(--bg)}
 </style>
 </head>
+<script>
+  // 저장된 테마를 첫 페인트 전에 적용한다. app.js 에서 하면 다크로 한 번 번쩍인다.
+  try {
+    var t = localStorage.getItem('pr-theme');
+    if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+  } catch (e) { /* 저장소가 막힌 브라우저 — 시스템 설정을 그대로 따른다 */ }
+</script>
 <body>
 <div class="app">
   <aside>
