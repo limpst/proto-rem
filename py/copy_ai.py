@@ -260,7 +260,9 @@ def suggest(card: dict | None, segment_id: str | None, keywords: list | None = N
     items, err = [], None
     try:
         # 문구는 짧지만 개수가 많다. 출력 상한을 넉넉히 준다.
-        raw = llm.complete(prompt, max_tokens=min(2400, 70 * count), temperature=0.85)
+        # 문구는 짧지만, 모델이 먼저 '생각' 에 토큰을 쓰면 본문이 한 글자도 안 나온다.
+        # 개수에 비례해 잡되 넉넉한 하한을 둔다.
+        raw = llm.complete(prompt, max_tokens=max(1600, min(3000, 90 * count)), temperature=0.85)
         arr = llm.parse_json(raw, want_list=True)
         if isinstance(arr, list):
             valid_kinds = {k["id"] for k in KINDS}

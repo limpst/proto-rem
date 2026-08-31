@@ -317,7 +317,18 @@ def _via_api(prompt: str, max_tokens: int) -> str:
             j = json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"Claude API {e.code}: {e.read().decode('utf-8', 'replace')[:400]}") from e
-    return "".join(b.get("text", "") for b in j.get("content", []))
+    blocks = j.get("content") or []
+    text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+    if not text.strip():
+        # 빈 문자열을 성공처럼 돌려주면 호출부는 "AI 가 아무것도 못 만들었다"로 보고
+        # 조용히 규칙 폴백으로 넘어간다. 실패는 실패라고 말해야 원인을 찾을 수 있다.
+        # (실제로 배포 서버에서 chars:0 이 성공으로 기록되고 있었다)
+        kinds = ",".join(sorted({str(b.get("type")) for b in blocks})) or "없음"
+        raise RuntimeError(
+            f"Claude API 가 본문을 돌려주지 않았습니다 "
+            f"(stop_reason={j.get('stop_reason')}, 블록={kinds}, max_tokens={max_tokens}). "
+            "생각에만 토큰을 다 쓴 경우가 많습니다 — max_tokens 를 늘려야 합니다.")
+    return text
 
 
 def _via_cli(prompt: str) -> str:
