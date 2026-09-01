@@ -26,6 +26,11 @@
   button:hover:not(:disabled){filter:brightness(1.08)}
   button:disabled{opacity:.4;cursor:not-allowed}
   .err{color:var(--bad);font-size:12.5px;margin-top:10px;min-height:18px}
+  .hint{
+    margin-top:14px;padding:10px 12px;border-radius:8px;font-size:12px;line-height:1.6;
+    background:#141d38;border:1px solid #2c3f6e;color:#a9c2ff;
+  }
+  .hint b{color:#dbe6ff}
 </style>
 </head>
 <body>
@@ -34,16 +39,31 @@
     <div class="co">㈜에이톰엔지니어링 아웃바운드 콘솔</div>
     <div class="why">
       이 화면에는 <b>명함(개인정보)</b>과 발송 설정이 들어 있어 사내에서도 아무나 열 수 없게 잠가 두었습니다.
-      비밀번호는 관리자가 <code>APP_PASSWORD</code> 로 정합니다.
+      아이디와 비밀번호는 관리자가 <code>APP_USER</code> · <code>APP_PASSWORD</code> 로 정합니다.
     </div>
-    <label for="pw">비밀번호</label>
-    <input id="pw" type="password" autocomplete="current-password" autofocus>
+    <label for="id">아이디</label>
+    <input id="id" type="text" autocomplete="username" autofocus>
+    <label for="pw" style="margin-top:12px">비밀번호</label>
+    <input id="pw" type="password" autocomplete="current-password">
     <button id="go" type="submit">들어가기</button>
     <div class="err" id="err"></div>
+    <div class="hint" id="hint" hidden></div>
   </form>
 <script>
   const f = document.getElementById('f');
+  const uid = document.getElementById('id');
   const pw = document.getElementById('pw');
+  const hintBox = document.getElementById('hint');
+
+  // 관리자가 적어 둔 힌트를 보여 준다. 없으면 아무것도 뜨지 않는다.
+  fetch('/api/login-info').then(r => r.json()).then(j => {
+    if (j && j.hint) {
+      hintBox.innerHTML = '<b>힌트</b> · ' + String(j.hint).replace(/[<>&]/g, c =>
+        ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+      hintBox.hidden = false;
+    }
+    if (j && j.user && !uid.value) uid.placeholder = j.user;
+  }).catch(() => { /* 힌트는 부수적이다. 못 받아도 로그인은 된다 */ });
   const go = document.getElementById('go');
   const err = document.getElementById('err');
   f.onsubmit = async (e) => {
@@ -54,12 +74,12 @@
       const r = await fetch('/api/login', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ password: pw.value }),
+        body: JSON.stringify({ user: uid.value, password: pw.value }),
       });
       const j = await r.json().catch(() => ({}));
       if (r.ok && j.ok) { location.replace('/'); return; }
       err.textContent = j.error || '로그인하지 못했습니다.';
-      pw.select();
+      pw.value = ''; pw.focus();
     } catch (e2) {
       err.textContent = '서버에 연결하지 못했습니다. ' + e2.message;
     }

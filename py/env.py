@@ -13,6 +13,8 @@ from . import paths
 
 ROOT = Path(__file__).resolve().parent.parent
 _LINE = re.compile(r"^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$")
+#: 새 항목을 직접 추가할 때 허용하는 이름. _LINE 이 되읽을 수 있는 형태여야 한다.
+_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def env_file() -> Path:
@@ -54,8 +56,25 @@ def _load() -> dict[str, str]:
     return _cache
 
 
+#: 프로세스가 시작될 때 정해지는 값. 화면에서 고쳐도 다시 켜기 전에는 의미가 없다.
+#: 이런 것만 실행 인자(os.environ)가 이긴다.
+BOOT_KEYS = {"PORT", "HOST", "DATA_DIR", "DB_PATH"}
+
+
 def env(key: str, fallback: str | None = None) -> str | None:
-    return os.environ.get(key) or _load().get(key) or fallback
+    """설정값 하나를 읽는다.
+
+    우선순위를 성격에 따라 나눈다.
+      부팅 파라미터  : 실행 인자 > .env    (PORT=8787 python -m py.server 를 살리기 위해)
+      운영 설정      : .env > 실행 인자    (⚙ 화면에서 고친 것이 실제로 먹혀야 하므로)
+
+    예전에는 무조건 실행 인자가 이겼다. 그래서 배포 서버처럼 모든 값이
+    환경변수로 들어오는 곳에서는 ⚙ 설정 화면이 사실상 읽기 전용이었다 —
+    고쳐도 저장은 되는데 아무 일도 일어나지 않았다.
+    """
+    if key in BOOT_KEYS:
+        return os.environ.get(key) or _load().get(key) or fallback
+    return _load().get(key) or os.environ.get(key) or fallback
 
 
 def env_int(key: str, fallback: int) -> int:
@@ -150,11 +169,13 @@ ENV_SPEC = [
     },
     {
         "key": "DEFAULT_SEGMENT", "group": "AI", "label": "미분류 대체 고객군",
-        "secret": False, "placeholder": "safety",
-        "what": "회사 업종을 끝내 못 알아낸 명함을 어느 고객군으로 볼지입니다. 비워두면 미분류로 남습니다.",
-        "why": "미분류는 발송 대상에서 빠집니다. 값을 넣으면 파이프라인이 멈추지 않고 끝까지 가지만, "
-               "엉뚱한 업종에 엉뚱한 메일이 갈 수 있으므로 검토 단계에서 반드시 확인하세요. "
-               "화면에는 '기본값 대체'로 표시됩니다.",
+        "secret": False, "placeholder": "office",
+        "what": "규칙도 AI 도 업종을 정하지 못한 명함을 어느 고객군으로 볼지입니다. "
+                "비워 두면 office(오피스·자산관리)를 씁니다.",
+        "why": "미분류로 남은 명함은 발송 대상에서 빠져 5~7단계가 열리지 않습니다. "
+               "기본값이 있으면 파이프라인이 멈추지 않고 끝까지 가지만, "
+               "엉뚱한 업종에 엉뚱한 메일이 갈 수 있습니다. 화면에는 '기본값 대체'로 표시되니 "
+               "4단계 표에서 사람이 직접 고쳐 넣으세요.",
     },
     {
         "key": "OLLAMA_MODEL", "group": "AI", "label": "Ollama 모델",
@@ -182,12 +203,17 @@ ENV_SPEC = [
         "why": "다른 프로그램과 겹칠 때만 바꾸세요. 바꾸면 서버를 다시 켜야 합니다.",
     },
     {
-        "key": "DEFAULT_SEGMENT", "group": "서버", "label": "기본 고객군",
-        "secret": False, "placeholder": "office",
-        "what": "규칙도 AI 도 고객군을 정하지 못한 명함에 임시로 넣어 둘 고객군입니다.",
-        "why": "미분류로 두면 그 명함은 발송 대상에서 빠져 5~7단계가 열리지 않습니다. "
-               "기본값을 두면 끝까지 진행되고, 표에서 사람이 바로 고쳐 넣을 수 있습니다. "
-               "비워 두면 office(오피스·자산관리)를 씁니다.",
+        "key": "APP_USER", "group": "서버", "label": "접속 아이디",
+        "secret": False, "placeholder": "atom",
+        "what": "로그인 화면에서 입력할 아이디입니다. 비워 두면 atom 입니다.",
+        "why": "비밀번호와 함께 맞아야 들어올 수 있습니다.",
+    },
+    {
+        "key": "APP_HINT", "group": "서버", "label": "로그인 힌트",
+        "secret": False, "placeholder": "예) 아이디·비밀번호 모두 atom",
+        "what": "로그인 화면 아래에 그대로 보여 줄 안내 문구입니다.",
+        "why": "⚠ 여기에 비밀번호를 적으면 화면을 여는 누구나 볼 수 있습니다. "
+               "사내 시연용으로만 쓰고, 실제 운영에서는 비우세요.",
     },
     {
         "key": "APP_PASSWORD", "group": "서버", "label": "접속 비밀번호",
@@ -206,7 +232,6 @@ ENV_SPEC = [
 ]
 
 _MASK = "••••••••"
-
 
 def read_env_file() -> dict[str, str]:
     """.env 원문을 키-값으로 읽는다 (캐시를 거치지 않는다)."""
@@ -229,12 +254,25 @@ def settings_view(reveal: bool = False) -> list[dict]:
     items = []
 
     for spec in ENV_SPEC:
-        raw = cur.get(spec["key"], "")
+        k = spec["key"]
+        raw = cur.get(k, "")
+        in_os = k in os.environ
+        boot = k in BOOT_KEYS
         items.append({
             **spec,
             "value": (_MASK if (raw and spec.get("secret") and not reveal) else raw),
-            "set": bool(raw),
-            "fromOsEnv": spec["key"] in os.environ,
+            "set": bool(raw or (in_os and not boot)),
+            "fromOsEnv": in_os,
+            # 부팅 파라미터는 지금 돌고 있는 서버에는 반영되지 않는다.
+            # 그렇다고 입력칸을 잠그면 "고칠 방법이 없는 항목" 이 되어버린다.
+            # 저장은 되게 하고, 다시 켜야 적용된다는 사실만 화면에 밝힌다.
+            "locked": False,
+            "needsRestart": boot,
+            "bootOverridden": boot and in_os,
+            # 환경변수에도 값이 있는데 여기서 덮어쓰고 있는 상태
+            "overrides": bool(raw) and in_os and not boot,
+            # 비어 있지만 환경변수가 값을 대고 있는 상태(화면에는 안 보이는 값이 쓰인다)
+            "fromOsOnly": (not raw) and in_os and not boot,
         })
 
     # .env 에 있지만 우리가 모르는 키도 숨기지 않는다. 관리자가 직접 넣은 것일 수 있다.
@@ -245,6 +283,7 @@ def settings_view(reveal: bool = False) -> list[dict]:
             "key": k, "group": "기타", "label": k, "secret": False,
             "what": "이 프로그램이 정의하지 않은 항목입니다.", "why": "직접 추가하신 값으로 보입니다.",
             "value": v, "set": bool(v), "fromOsEnv": k in os.environ,
+            "locked": False, "overrides": k in os.environ, "fromOsOnly": False,
         })
     return items
 
@@ -254,8 +293,18 @@ def write_env(updates: dict[str, str]) -> dict:
 
     값이 마스킹 문자열 그대로 오면 '바꾸지 않음' 으로 본다.
     빈 문자열이 오면 해당 줄을 지운다(기본값으로 되돌리기).
+
+    @raises ValueError 파일을 깨뜨릴 입력일 때. 이름에 공백이 섞이거나 값에 줄바꿈이
+        들어가면 다음에 읽을 때 그 줄부터 통째로 무시된다 — 저장은 됐는데 설정이
+        사라지는 형태로 나타나므로, 쓰기 전에 막는다.
     """
     global _cache
+    for k, v in updates.items():
+        if not _KEY_RE.match(k):
+            raise ValueError(f"항목 이름 '{k}' 은(는) 쓸 수 없습니다. "
+                             "영문 대문자·숫자·밑줄만 쓰고 숫자로 시작하지 마세요 (예: MY_SETTING).")
+        if "\n" in v or "\r" in v:
+            raise ValueError(f"'{k}' 의 값에 줄바꿈이 들어 있습니다. 한 줄로 넣어 주세요.")
     f = env_file()
     lines = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
     seen: set[str] = set()

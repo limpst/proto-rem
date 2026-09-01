@@ -18,13 +18,16 @@ import threading
 from pathlib import Path
 
 from . import paths
+from .env import env
 
 ROOT = Path(__file__).resolve().parent.parent
 # 읽기 전용 자산(seed)과 살아남아야 할 상태(DB)는 자리가 다르다. paths.py 참고.
 ASSETS = paths.ASSETS
 DATA = paths.STATE
 DB_PATH = os.environ.get("DB_PATH") or str(DATA / "proto-rem.db")
-TENANT = os.environ.get("TENANT_ID", "atom-eng")
+# os.environ 만 보면 ⚙ 설정 화면에서 넣은 값(.env)이 무시된다.
+# 화면에 칸을 열어두고 고쳐도 아무 일이 없어, 서버를 껐다 켜도 그대로였다.
+TENANT = env("TENANT_ID", "atom-eng")
 
 DEFAULTS = {
     "tenantId": TENANT,

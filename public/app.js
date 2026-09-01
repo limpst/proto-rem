@@ -572,7 +572,9 @@ const T = {
   savemail: '고친 수신 주소를 저장합니다. 명함에도 함께 반영됩니다.',
   fSubject: '메일 제목입니다. 여기서 고친 뒤 [승인] 또는 [고친 내용만 저장]을 눌러야 반영됩니다. (광고) 표기는 발송 시 자동으로 붙습니다.',
   fBody: '메일 본문입니다. 여기서 고친 뒤 [승인] 또는 [고친 내용만 저장]을 눌러야 반영됩니다. 수신거부 안내와 서명은 발송 시 자동으로 붙습니다.',
-  osEnv: '이 값은 호스팅(Render 등)의 환경변수로 지정돼 있습니다. 환경변수가 .env 보다 우선하므로 여기서 고쳐도 바뀌지 않습니다. 호스팅 대시보드에서 바꾸세요.',
+  osEnv: '이 값은 프로그램을 켤 때 정해집니다(PORT·데이터 폴더 등). 여기서 고쳐도 다시 켜기 전에는 바뀌지 않아 잠가 두었습니다.',
+  osOver: '호스팅 환경변수에도 값이 있지만, 여기서 정한 값이 우선합니다. 비우면 다시 환경변수 값으로 돌아갑니다.',
+  osOnly: '지금은 호스팅 환경변수의 값이 쓰이고 있습니다(보안상 화면에는 보이지 않습니다). 여기에 값을 넣으면 그쪽을 덮어씁니다.',
   setSave: '고친 값을 .env 파일에 씁니다. 항목에 따라 서버를 다시 시작해야 적용되는 것도 있습니다.',
   setReveal: '가려진 비밀값(API 키·앱 비밀번호)을 화면에 그대로 보여줍니다. 화면 공유 중에는 누르지 마세요.',
   setReload: '.env 의 현재 값을 다시 읽어옵니다. 저장하지 않은 입력은 버려집니다.',
@@ -1283,27 +1285,50 @@ function settingsView() {
               <code style="font-size:10.5px;color:var(--tx3)">${esc(i.key)}</code>
               ${i.set ? '<span class="tag ok">설정됨</span>' : '<span class="tag">비어 있음</span>'}
               ${i.secret ? '<span class="tag warn">비밀값</span>' : ''}
-              ${i.fromOsEnv ? `<span class="tag warn" title="${T.osEnv}">환경변수 우선 · 여기서 못 바꿈</span>` : ''}
+              ${i.bootOverridden
+                ? `<span class="tag warn" title="지금 돌고 있는 서버는 켤 때 받은 값을 쓰고 있습니다. 여기서 고치면 저장은 되고, 서버를 다시 켤 때 이 값이 쓰입니다.">실행 인자 우선 · 다시 켜면 적용</span>`
+                : i.needsRestart
+                  ? `<span class="tag" title="저장은 즉시 되지만, 이 항목은 서버를 다시 켜야 실제로 바뀝니다.">다시 켜야 적용</span>`
+                  : i.overrides ? `<span class="tag seg" title="${T.osOver}">여기 값이 우선</span>`
+                  : i.fromOsOnly ? `<span class="tag" title="${T.osOnly}">환경변수 값 사용 중</span>` : ''}
             </div>
             <div class="muted" style="font-size:12px;margin:5px 0 3px">${esc(i.what)}</div>
             <div style="font-size:12px;color:var(--tx2);margin-bottom:8px">${esc(i.why)}</div>
             ${isBool
               ? `<div class="row">
                    <button class="opt ${String(val) === '1' ? 'on' : ''}" style="width:auto;padding:7px 14px"
-                     data-set="${i.key}" data-val="1" ${i.fromOsEnv ? 'disabled' : ''}
-                     title="${i.fromOsEnv ? T.osEnv : `${esc(i.key)} 를 1(켬)로 둡니다. ${T.setPending}`}">켜기 (1)</button>
+                     data-set="${i.key}" data-val="1"
+                     title="${esc(i.key)} 를 1(켬)로 둡니다. ${T.setPending}">켜기 (1)</button>
                    <button class="opt ${String(val) !== '1' ? 'on' : ''}" style="width:auto;padding:7px 14px"
-                     data-set="${i.key}" data-val="" ${i.fromOsEnv ? 'disabled' : ''}
-                     title="${i.fromOsEnv ? T.osEnv : `${esc(i.key)} 를 비워 끕니다. ${T.setPending}`}">끄기</button>
+                     data-set="${i.key}" data-val="" ${i.locked ? 'disabled' : ''}
+                     title="${i.locked ? T.osEnv : `${esc(i.key)} 를 비워 끕니다. ${T.setPending}`}">끄기</button>
                  </div>`
               : `<input class="site-in" style="max-width:520px" data-setting="${i.key}"
                    value="${esc(val)}" placeholder="${esc(i.placeholder ?? '')}"
-                   ${i.fromOsEnv ? 'disabled' : ''}
-                   title="${i.fromOsEnv ? T.osEnv : `${i.secret ? '비밀값입니다 — 화면에는 가려서 나오고 [비밀값 보기] 로만 확인됩니다. ' : ''}${T.setPending} 비워서 저장하면 이 항목을 지우고 기본값으로 되돌립니다.`}"
+                   ${i.locked ? 'disabled' : ''}
+                   title="${i.locked ? T.osEnv
+                     : i.overrides ? T.osOver
+                     : i.fromOsOnly ? T.osOnly
+                     : `${i.secret ? '비밀값입니다 — 화면에는 가려서 나오고 [비밀값 보기] 로만 확인됩니다. ' : ''}${T.setPending} 비워서 저장하면 이 항목을 지우고 기본값으로 되돌립니다.`}"
                    ${i.secret && !settingsReveal ? 'type="password"' : ''}>`}
           </div>`;
         }).join('')}
-      </div>`).join('')}`;
+      </div>`).join('')}
+
+    <div class="panel">
+      <div class="cap">새 항목 직접 추가</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px">
+        위 목록에 없는 값을 <code>.env</code> 에 직접 넣습니다.
+        이 프로그램이 모르는 이름이면 저장 뒤 <b>기타</b> 묶음에 나타납니다.
+        이름은 영문 대문자·숫자·밑줄만 씁니다 (예: <code>SMTP_HOST</code>).</div>
+      <div class="row">
+        <input class="site-in" id="newkey" style="max-width:240px" placeholder="MY_SETTING"
+          title="추가할 항목의 이름입니다. 공백이나 한글이 섞이면 파일을 다시 읽을 때 그 줄이 통째로 무시되므로 저장이 거부됩니다.">
+        <input class="site-in" id="newval" style="max-width:320px" placeholder="값"
+          title="넣을 값입니다. 한 줄로 적어 주세요.">
+        <button data-act="settings-add" title="입력한 이름과 값을 .env 에 바로 저장합니다. 위의 [변경 저장]과 달리 이 버튼은 누르는 즉시 파일에 씁니다.">추가하고 저장</button>
+      </div>
+    </div>`;
 }
 
 const VIEWS = {
@@ -1957,6 +1982,19 @@ function bind() {
     'scenario-clear': async () => { SC.results = {}; return null; },
     'settings-reveal': async () => { await loadSettings(!settingsReveal); return null; },
     'settings-reload': async () => { Object.keys(settingsEdits).forEach(k => delete settingsEdits[k]); await loadSettings(settingsReveal); return null; },
+    'settings-add': async () => {
+      // 입력값은 **누른 순간** 읽는다. api() 뒤에 읽으면 그 사이 render() 가
+      // #view 를 다시 그려 입력칸이 새것으로 바뀌어 빈 값이 잡힌다.
+      const key = (val('#newkey') || '').trim();
+      const value = (val('#newval') || '').trim();
+      if (!key) { alert('추가할 항목의 이름을 넣어 주세요.'); return null; }
+      if (!value) { alert(`'${key}' 에 넣을 값이 비어 있습니다. 값이 없는 항목은 만들 필요가 없습니다.`); return null; }
+      const r = await api('/api/settings', { updates: { [key]: value } });
+      if (r.error) { alert(r.error); return null; }
+      SETTINGS = r.items ?? SETTINGS;
+      alert(`${key} 를 저장했습니다.`);
+      return null;
+    },
     'settings-save': async () => {
       const updates = { ...settingsEdits };
       if (!Object.keys(updates).length) return null;

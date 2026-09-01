@@ -157,13 +157,22 @@ def _job_run(jid: str, fn):
 COOKIE = "pr_session"
 
 
+#: 아이디를 따로 정하지 않으면 이것을 쓴다.
+DEFAULT_USER = "atom"
+
+
 def _auth_on() -> bool:
     return bool(env("APP_PASSWORD"))
 
 
+def _auth_user() -> str:
+    return (env("APP_USER") or DEFAULT_USER).strip()
+
+
 def _token() -> str:
-    return hmac.new((env("APP_PASSWORD") or "").encode(),
-                    b"proto-rem-session-v1", hashlib.sha256).hexdigest()
+    # 아이디까지 섞는다. 아이디를 바꾸면 기존 세션도 끊긴다.
+    key = ((_auth_user() + "\x00" + (env("APP_PASSWORD") or "")).encode())
+    return hmac.new(key, b"proto-rem-session-v2", hashlib.sha256).hexdigest()
 
 
 def _authed(cookie_header: str) -> bool:
@@ -558,7 +567,12 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
         updates = body.get("updates") or {}
         if not isinstance(updates, dict) or not updates:
             return 400, {"error": "바꿀 항목이 없습니다."}
-        r = write_env({str(k): str(v) for k, v in updates.items()})
+        try:
+            r = write_env({str(k): str(v) for k, v in updates.items()})
+        except ValueError as e:
+            # 파일을 깨뜨릴 입력. 화면에 그대로 보여 준다 (500 으로 삼키면 원인을 알 수 없다).
+            L.log("error", "settings", f"설정 저장 거부 — {e}")
+            return 400, {"error": str(e)}
         llm.resolve_backend(refresh=True)       # 백엔드 설정이 바뀌었을 수 있다
         L.log("ok", "settings", f"설정 변경 — 수정 {len(r['changed'])} · 추가 {len(r['added'])} · 삭제 {len(r['removed'])}",
               {"keys": r["changed"] + r["added"] + r["removed"]})
@@ -1477,14 +1491,21 @@ class Handler(BaseHTTPRequestHandler):
         # --- 접속 인증 게이트 -------------------------------------------
         if _auth_on() and not _authed(self.headers.get("cookie", "")):
           try:
+            # 로그인 화면이 힌트를 읽어야 하므로 이것만 인증 전에 연다.
+            # 비밀값은 담지 않는다 — 관리자가 힌트에 적어 넣은 문구만 그대로 돌려준다.
+            if path == "/api/login-info" and method == "GET":
+                return self._send(200, {"user": _auth_user(), "hint": env("APP_HINT") or ""})
             if path == "/api/login" and method == "POST":
-                if hmac.compare_digest(str(body.get("password") or ""), env("APP_PASSWORD") or ""):
+                ok_id = hmac.compare_digest(str(body.get("user") or "").strip(), _auth_user())
+                ok_pw = hmac.compare_digest(str(body.get("password") or ""), env("APP_PASSWORD") or "")
+                if ok_id and ok_pw:
                     L.log("ok", "auth", f"로그인 — {self.client_address[0]}")
                     return self._send(200, {"ok": True}, headers={
                         "set-cookie": f"{COOKIE}={_token()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000"})
                 time.sleep(1.0)          # 무차별 대입 속도를 늦춘다
                 L.log("warn", "auth", f"로그인 실패 - {self.client_address[0]}")
-                return self._send(401, {"error": "비밀번호가 다릅니다."})
+                # 어느 쪽이 틀렸는지 알려 주지 않는다. 아이디 존재 여부가 새어 나간다.
+                return self._send(401, {"error": "아이디 또는 비밀번호가 다릅니다."})
             if path.startswith("/api/"):
                 return self._send(401, {"error": "로그인이 필요합니다.", "login": True})
             if path != "/login.html":

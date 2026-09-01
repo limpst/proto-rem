@@ -25,8 +25,17 @@ from . import store
 from .env import env, env_int
 
 CLAUDE_MODEL = "claude-sonnet-5"
-OLLAMA_URL = env("OLLAMA_URL", "http://127.0.0.1:11434")
-DEFAULT_OLLAMA_MODEL = env("OLLAMA_MODEL", "exaone3.5:7.8b")
+
+
+# 불러올 때 한 번 읽어 상수로 굳히면, ⚙ 설정 화면에서 모델을 바꿔 저장해도
+# 서버를 껐다 켜기 전까지 옛 모델로 계속 호출한다. 그래서 쓸 때마다 읽는다.
+def ollama_url() -> str:
+    return env("OLLAMA_URL", "http://127.0.0.1:11434")
+
+
+def default_ollama_model() -> str:
+    return env("OLLAMA_MODEL", "exaone3.5:7.8b")
+
 
 _cached_backend: dict | None = None
 _cached_override: dict | None | str = "unread"
@@ -90,7 +99,7 @@ def set_backend(name: str | None = None, model: str | None = None) -> dict:
 
 def ollama_alive() -> bool:
     try:
-        with urllib.request.urlopen(f"{OLLAMA_URL}/api/tags", timeout=1.5) as r:
+        with urllib.request.urlopen(f"{ollama_url()}/api/tags", timeout=1.5) as r:
             return r.status == 200
     except Exception:
         return False
@@ -120,8 +129,8 @@ def usable(name: str) -> bool:
 
 def _make(name: str, source: str, picked: str | None = None, note: str | None = None) -> dict:
     if name == "ollama":
-        model = picked or DEFAULT_OLLAMA_MODEL
-        b = {"name": "ollama", "model": model, "url": OLLAMA_URL, "source": source,
+        model = picked or default_ollama_model()
+        b = {"name": "ollama", "model": model, "url": ollama_url(), "source": source,
              "alive": True, "cloud": is_cloud_model(model)}
     else:
         b = {"name": name, "model": CLAUDE_MODEL, "source": source, "cloud": True}
@@ -182,7 +191,7 @@ def resolve_backend(refresh: bool = False) -> dict:
 def list_ollama_models() -> dict:
     """설치된 Ollama 모델 목록. 대시보드의 모델 선택기가 쓴다."""
     try:
-        with urllib.request.urlopen(f"{OLLAMA_URL}/api/tags", timeout=2.5) as r:
+        with urllib.request.urlopen(f"{ollama_url()}/api/tags", timeout=2.5) as r:
             j = json.loads(r.read().decode("utf-8"))
     except Exception as e:
         return {"ok": False, "reason": str(e), "models": []}
@@ -200,7 +209,7 @@ def list_ollama_models() -> dict:
 def _run(name: str, model: str | None, prompt: str,
          max_tokens: int | None, temperature: float | None) -> str:
     if name == "ollama":
-        return _via_ollama(prompt, model or DEFAULT_OLLAMA_MODEL, max_tokens, temperature)
+        return _via_ollama(prompt, model or default_ollama_model(), max_tokens, temperature)
     if name == "claude-api":
         return _via_api(prompt, max_tokens or 1500)
     if name == "claude-cli":
@@ -218,7 +227,7 @@ def _usable_backends() -> list[tuple[str, str | None]]:
     if env("ANTHROPIC_API_KEY"):
         out.append(("claude-api", CLAUDE_MODEL))
     if ollama_alive():
-        out.append(("ollama", (_override() or {}).get("model") or DEFAULT_OLLAMA_MODEL))
+        out.append(("ollama", (_override() or {}).get("model") or default_ollama_model()))
     if claude_cli_exists():
         out.append(("claude-cli", CLAUDE_MODEL))
     return out
@@ -284,7 +293,7 @@ def _via_ollama(prompt: str, model: str, max_tokens: int | None, temperature: fl
         },
     }).encode("utf-8")
 
-    req = urllib.request.Request(f"{OLLAMA_URL}/api/generate", data=payload,
+    req = urllib.request.Request(f"{ollama_url()}/api/generate", data=payload,
                                  headers={"content-type": "application/json"})
     # 한 백엔드에 얼마나 기다릴지. 이 시간을 넘기면 실패로 보고 다음 백엔드로 넘어간다.
     # 무한정 기다리면 화면이 먼저 끊기고, 사용자는 "그냥 안 된다" 로만 겪는다.
