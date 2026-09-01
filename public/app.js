@@ -1237,6 +1237,26 @@ async function loadSettings(reveal = false) {
   return SETTINGS;
 }
 
+/** 고친 값이 몇 건인지 화면에 반영한다.
+ *
+ *  일부러 render() 를 부르지 않는다. 설정 화면에서 다시 그리면 두 가지가 깨진다.
+ *    ① 타이핑 중이면 입력칸이 새것으로 바뀌어 커서가 날아간다.
+ *    ② 입력칸에서 버튼으로 갈 때(blur) 다시 그리면 누르려던 버튼이 사라져
+ *       mouseup 이 다른 요소에 떨어지고 클릭이 통째로 씹힌다.
+ *  그래서 바뀌는 곳(저장 버튼과 하단 알림 띠)만 직접 손본다. */
+function syncSaveBtn() {
+  const n = Object.keys(settingsEdits).length;
+  document.querySelectorAll('[data-act="settings-save"]').forEach(b => {
+    b.disabled = !n;
+    if (!b.dataset.baseLabel) b.dataset.baseLabel = b.textContent.replace(/\s*\(\d+건\)$/, '');
+    b.textContent = n ? `${b.dataset.baseLabel} (${n}건)` : b.dataset.baseLabel;
+  });
+  const bar = document.querySelector('#setDirtyBar');
+  if (bar) bar.hidden = !n;
+  const cnt = document.querySelector('#setDirtyN');
+  if (cnt) cnt.textContent = `저장하지 않은 변경 ${n}건`;
+}
+
 function settingsView() {
   if (!SETTINGS) return '<div class="panel muted">설정을 불러오는 중…</div>';
   const groups = [...new Set(SETTINGS.map(i => i.group))];
@@ -1259,18 +1279,20 @@ function settingsView() {
       </div>
     </div>
 
-    ${dirty ? `
-      <div style="position:sticky;bottom:calc(var(--console-h) + 12px);z-index:40;margin:0 0 14px">
-        <div style="background:linear-gradient(135deg,#182240,#141b2e);border:1px solid var(--br);
-          border-radius:12px;padding:13px 16px;display:flex;align-items:center;gap:12px;
-          flex-wrap:wrap;box-shadow:var(--sh-lg)">
-          <b style="font-size:13px">저장하지 않은 변경 ${dirty}건</b>
-          <span class="muted" style="font-size:12px">화면을 옮기면 사라집니다</span>
-          <span style="flex:1"></span>
-          <button data-act="settings-save" title="${T.setSave}">변경 저장</button>
-          <button class="ghost" data-act="settings-reload" title="${T.setReload}">되돌리기</button>
-        </div>
-      </div>` : ''}
+    <!-- 고친 값이 없을 때는 숨기기만 한다. 조건부로 넣었다 뺐다 하면 값을 고친 뒤
+         저장을 누르는 순간 화면이 다시 그려져 누르던 버튼이 사라지고 클릭이 먹통이 된다. -->
+    <div id="setDirtyBar" ${dirty ? '' : 'hidden'}
+      style="position:sticky;bottom:calc(var(--console-h) + 12px);z-index:40;margin:0 0 14px">
+      <div style="background:linear-gradient(135deg,#182240,#141b2e);border:1px solid var(--br);
+        border-radius:12px;padding:13px 16px;display:flex;align-items:center;gap:12px;
+        flex-wrap:wrap;box-shadow:var(--sh-lg)">
+        <b style="font-size:13px" id="setDirtyN">저장하지 않은 변경 ${dirty}건</b>
+        <span class="muted" style="font-size:12px">화면을 옮기면 사라집니다</span>
+        <span style="flex:1"></span>
+        <button data-act="settings-save" title="${T.setSave}">변경 저장</button>
+        <button class="ghost" data-act="settings-reload" title="${T.setReload}">되돌리기</button>
+      </div>
+    </div>
 
     ${groups.map(g => `
       <div class="panel">
@@ -1827,6 +1849,7 @@ const ctxNow = () => ({
   channel: val('#ch') || 'email',
   count: Number(val('#cpCount') || 30),
   to: val('#tsTo'), subject: val('#tsSubject'), body: val('#tsBody'),
+  newKey: val('#newkey').trim(), newVal: val('#newval').trim(),
   card: {
     name: val('#acName'), title: val('#acTitle'), company: val('#acCompany'),
     email: val('#acEmail'), phone: val('#acPhone'), site: val('#acSite'),
@@ -1982,11 +2005,12 @@ function bind() {
     'scenario-clear': async () => { SC.results = {}; return null; },
     'settings-reveal': async () => { await loadSettings(!settingsReveal); return null; },
     'settings-reload': async () => { Object.keys(settingsEdits).forEach(k => delete settingsEdits[k]); await loadSettings(settingsReveal); return null; },
-    'settings-add': async () => {
-      // 입력값은 **누른 순간** 읽는다. api() 뒤에 읽으면 그 사이 render() 가
-      // #view 를 다시 그려 입력칸이 새것으로 바뀌어 빈 값이 잡힌다.
-      const key = (val('#newkey') || '').trim();
-      const value = (val('#newval') || '').trim();
+    // 입력값은 여기서 읽지 않는다. run() 이 진행 표시를 위해 fn 보다 먼저 render() 를
+    // 부르는데, 그때 #view 가 통째로 다시 그려져 입력칸이 빈 새것으로 바뀐다.
+    // 그래서 누른 순간 ctxNow() 가 읽어 둔 값을 받아 쓴다.
+    'settings-add': async (ctx) => {
+      const key = ctx?.newKey ?? '';
+      const value = ctx?.newVal ?? '';
       if (!key) { alert('추가할 항목의 이름을 넣어 주세요.'); return null; }
       if (!value) { alert(`'${key}' 에 넣을 값이 비어 있습니다. 값이 없는 항목은 만들 필요가 없습니다.`); return null; }
       const r = await api('/api/settings', { updates: { [key]: value } });
@@ -2370,10 +2394,15 @@ function bind() {
   if (acp) acp.ontoggle = () => { acOpen = acp.open; };
 
   document.querySelectorAll('[data-setting]').forEach(inp => {
-    inp.oninput = () => { settingsEdits[inp.dataset.setting] = inp.value; };
-    inp.onchange = () => { settingsEdits[inp.dataset.setting] = inp.value; render(); };
+    // 타이핑 중에는 다시 그리지 않는다 — #view 를 새로 그리면 커서가 날아간다.
+    // 대신 [변경 저장] 버튼만 손으로 켠다. 이게 없으면 값을 고쳐도 버튼이 잠긴 채라,
+    // 누르려 해도 disabled 라서 아무 일도 일어나지 않는다(포커스가 그대로라 blur 도 안 난다).
+    inp.oninput = () => { settingsEdits[inp.dataset.setting] = inp.value; syncSaveBtn(); };
+    inp.onchange = () => { settingsEdits[inp.dataset.setting] = inp.value; syncSaveBtn(); };
   });
   document.querySelectorAll('[data-set]').forEach(b => {
+    // 켜기/끄기는 눌린 쪽 표시가 바뀌어야 하므로 여기서는 다시 그린다.
+    // 입력칸이 아니라 버튼이라 blur 로 클릭이 씹히는 문제가 없다.
     b.onclick = () => { settingsEdits[b.dataset.set] = b.dataset.val; render(); };
   });
   document.querySelectorAll('[data-site]').forEach(inp => {
