@@ -21,6 +21,10 @@ page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
 page.on('console', m => {
   if (m.type() === 'error') errors.push(`console: ${m.text().slice(0, 200)}`);
 });
+// 404 를 콘솔 문자열로만 보면 "무엇이" 없는지 알 수 없다. URL 을 남긴다.
+page.on('response', r => {
+  if (r.status() >= 400) errors.push(`http ${r.status()} ${r.request().method()} ${r.url()}`);
+});
 // alert/confirm 은 자동으로 넘긴다. 내용은 기록한다.
 page.on('dialog', async d => {
   dialogs.push(`${d.type()}: ${d.message().slice(0, 160)}`);
@@ -94,37 +98,69 @@ await step('관리자 설정 열기', async () => {
   if (!n) throw new Error('설정 항목이 하나도 없습니다');
 });
 
-await step('STEP 1 · 명함 수집', async () => {
+// 화면에 실제로 있는 버튼 이름으로 확인한다. 없는 이름을 찾다가 '건너뜀' 이
+// 되면 테스트는 통과 표시를 주면서 아무것도 검사하지 않는다. 그게 제일 나쁘다.
+/** 접힘 패널 안에 있어도 '화면에 있는' 것으로 본다. 접혀 있는 것은 버그가 아니다. */
+const hasButtons = async (step, labels) => {
+  const found = await page.locator('#view button').evaluateAll(
+    els => els.map(e => e.textContent.replace(/\s+/g, ' ').trim()));
+  const missing = labels.filter(l => !found.some(f => f.includes(l)));
+  if (missing.length) throw new Error(`${step}: 버튼 없음 — ${missing.join(', ')}`);
+  console.log(`      · 버튼 ${labels.length}개 확인`);
+};
+
+const seen = async (label, sel, min = 1) => {
+  const n = await page.locator(sel).count();
+  if (n < min) throw new Error(`${label}: ${sel} 이 ${n}개 (${min}개 이상이어야 함)`);
+  console.log(`      · ${label} ${n}개`);
+};
+
+await step('STEP 1 · 명함 목록이 실제로 있는가', async () => {
   await goStep(1);
-  await click('명함 불러오기');
+  await seen('명함 행', '#view [data-cid], #view tbody tr');
+  await hasButtons('STEP 1', ['전부 가져오기', 'CDP 로 가져오기', '붙여넣은 내용으로 명함 만들기']);
 });
 
-await step('STEP 2 · 발신·홈페이지', async () => {
+await step('STEP 2 · 발신 명의·발송 방식 고르기', async () => {
   await goStep(2);
-  await click('홈페이지 자동 찾기', { wait: 3000 });
+  await hasButtons('STEP 2', ['대표', '마케팅 담당자', '1 : 1 개별 맞춤', '1 : N 고객군 공통']);
 });
 
-await step('STEP 3 · 저장된 분석으로 건너뛰기', async () => {
+await step('STEP 3 · 홈페이지 분석 결과가 남아 있는가', async () => {
   await goStep(3);
-  await click('저장된 분석으로 건너뛰기', { wait: 2500 });
+  await page.waitForTimeout(700);
+  const txt = await page.locator('#view').innerText();
+  if (!txt.trim()) throw new Error('STEP 3 화면이 비어 있습니다');
 });
 
-await step('STEP 4 · 고객군 분류 + 대상 선택', async () => {
+await step('STEP 4 · 고객군 8종 + 대상 선택', async () => {
   await goStep(4);
-  await click('고객군 분류', { wait: 2500 });
-  const boxes = page.locator('.pick:not(:disabled)');
-  const n = Math.min(await boxes.count(), 2);
-  for (let i = 0; i < n; i++) { await boxes.nth(i).check(); await page.waitForTimeout(400); }
+  await seen('고객군', '#view .seg, #view [data-seg]', 8);
+  await hasButtons('STEP 4', ['발송 가능 전체', '선택 해제']);
 });
 
-await step('STEP 5 · 화면 렌더', async () => {
+// 승인·반려 버튼은 문안이 만들어진 뒤에야 생긴다. 초안이 없는 환경(갓 배포한
+// 서버 등)에서 이걸 실패로 적으면, 진짜 고장과 구분이 안 된다. 상태를 먼저 본다.
+const draftCount = async () => page.evaluate(async () => {
+  const r = await fetch('/api/state'); const j = await r.json();
+  return (j.cards || []).filter(c => c.message).length;
+});
+
+await step('STEP 5 · 문구 화면 (AI 호출은 하지 않음)', async () => {
   await goStep(5);
   await page.waitForTimeout(800);
+  await hasButtons('STEP 5', ['문구 추천 받기']);
+  const n = await draftCount();
+  if (n) await hasButtons('STEP 5', ['승인', '반려']);
+  else console.log('      · 초안 0건 — 승인·반려 버튼 검사 생략');
 });
 
-await step('STEP 6 · 화면 렌더', async () => {
+await step('STEP 6 · 승인 게이트', async () => {
   await goStep(6);
   await page.waitForTimeout(800);
+  const n = await draftCount();
+  if (n) await hasButtons('STEP 6', ['승인', '반려']);
+  else console.log('      · 초안 0건 — 승인 게이트에 검사할 대상 없음');
 });
 
 await step('STEP 7 · 발송 이력 (검색·정렬·페이징)', async () => {
