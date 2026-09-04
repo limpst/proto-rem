@@ -1667,7 +1667,7 @@ DRY_RUN=1</pre></div>` : ''}
     <div class="panel">
       <div class="cap">자동으로 걸리는 안전장치</div>
       <div class="muted" style="font-size:12.5px">
-        승인한 메일만 나갑니다 · 밤 9시~아침 8시 발송 차단 · (광고) 표기와 수신거부 안내 자동 삽입</div>
+        승인한 메일만 나갑니다 · 밤 9시~아침 8시 차단 · 수신거부 제외 · 같은 사람 30일 내 재발송 차단 · 하루 상한 · (광고) 표기 자동 삽입 <b>(모두 ⚙ 관리자 설정에서 변경)</b></div>
     </div>
     ${(() => {
       const hist = (S.cards ?? []).filter(c => c.message);

@@ -25,7 +25,7 @@ from email.mime.text import MIMEText
 from email.utils import formataddr
 
 from . import log as L
-from .env import env
+from .env import env, env_int
 
 
 def smtp_status() -> dict:
@@ -91,3 +91,75 @@ def send_email(to: str, subject: str, body: str) -> dict:
     except Exception as e:
         L.log("error", "smtp", f"발송 실패 → {to}: {e}")
         return {"ok": False, "error": str(e)}
+
+# ─────────────────────────────────────────────────────────────────────
+# 발송 게이트 — 화면에서 전부 켜고 끌 수 있다.
+#
+# 여기 있는 것들은 "있다고 적어 두면 사람이 믿는" 종류다.
+# 그래서 안내 문구와 실제 동작이 어긋나면 안 된다.
+# ─────────────────────────────────────────────────────────────────────
+
+def consent_blocked(card: dict) -> str | None:
+    """수신 동의가 '거부' 인 사람에게는 보내지 않는다.
+
+    광고성 정보는 사전 동의가 원칙이다. 거부 의사를 명함에 적어 두고도
+    발송되면, 기록이 남아 있다는 점 때문에 오히려 더 무겁다.
+    """
+    if env("RESPECT_CONSENT", "1") != "1":
+        return None
+    if (card.get("consent") or "").strip() == "거부":
+        return "수신 거부로 표시된 분입니다. 발송하지 않습니다."
+    return None
+
+
+def resend_blocked(card: dict) -> str | None:
+    """같은 사람에게 너무 자주 보내지 않는다.
+
+    같은 내용을 반복해 받으면 스팸 신고로 이어지고, 도메인 평판이 상한다.
+    한 번 상한 평판은 되돌리기 어렵다.
+    """
+    days = env_int("RESEND_BLOCK_DAYS", 30)
+    if days <= 0:
+        return None
+    last = card.get("deliveredAt")
+    if not last:
+        return None
+    try:
+        prev = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if prev.tzinfo:
+        prev = prev.replace(tzinfo=None)
+    gap = (datetime.now() - prev).days
+    if gap < days:
+        return f"{gap}일 전에 이미 보냈습니다. {days}일 이내 재발송은 막혀 있습니다."
+    return None
+
+
+def daily_limit_reached(sent_today: int) -> str | None:
+    """하루 발송 상한. Gmail 개인 계정은 하루 500통 안팎에서 계정이 잠긴다."""
+    cap = env_int("DAILY_SEND_LIMIT", 0)
+    if cap <= 0:
+        return None
+    if sent_today >= cap:
+        return f"오늘 {sent_today}건을 보냈습니다. 하루 상한({cap}건)에 도달했습니다."
+    return None
+
+
+def send_interval_sec() -> float:
+    """연속 발송 사이 간격. 한꺼번에 쏟아내면 스팸 필터에 걸리기 쉽다."""
+    try:
+        return max(0.0, float(env("SEND_INTERVAL_SEC", "2")))
+    except ValueError:
+        return 2.0
+
+
+def preflight(card: dict, sent_today: int = 0) -> str | None:
+    """발송 전 점검. 막을 이유가 있으면 그 이유를 돌려준다."""
+    if not (card.get("email") or "").strip():
+        return "이메일 주소가 없습니다."
+    for check in (consent_blocked(card), resend_blocked(card),
+                  daily_limit_reached(sent_today)):
+        if check:
+            return check
+    return None

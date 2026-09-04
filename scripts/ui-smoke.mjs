@@ -9,7 +9,7 @@
  */
 import { chromium } from 'playwright';
 
-const BASE = process.env.UI_BASE ?? 'http://localhost:8787';
+const BASE = process.env.UI_BASE ?? 'http://localhost:5173';
 const errors = [];
 const dialogs = [];
 
@@ -67,8 +67,16 @@ const goStep = async (n) => {
 
 console.log(`\n화면 스모크 — ${BASE}\n`);
 
-await step('페이지 로딩', async () => {
+await step('페이지 로딩 · 로그인', async () => {
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+  // 로그인 화면이 뜨면 통과한다. 대시보드가 바로 나오면 이미 로그인 상태다.
+  const id = page.locator('#id').first();
+  if (await id.count() && !(await page.locator('#rail .step').count())) {
+    await id.fill(process.env.APP_USER ?? 'atom');
+    await page.locator('input[type="password"]').first().fill(process.env.APP_PASSWORD ?? 'atom');
+    await page.getByRole('button').first().click();
+    await page.waitForTimeout(1500);
+  }
   await page.waitForSelector('#rail .step', { timeout: 20000 });
 });
 
@@ -131,6 +139,17 @@ await step('STEP 7 · 발송 이력 (검색·정렬·페이징)', async () => {
   }
   const th = page.locator('[data-tsort]').first();
   if (await th.count()) { await th.click(); await page.waitForTimeout(600); }
+});
+
+await step('발송 안전장치 4종이 설정 화면에 있는가', async () => {
+  await page.locator('.step[data-n="settings"]').click();
+  await page.waitForTimeout(1200);
+  const txt = await page.locator('#view').innerText();
+  const want = ['수신거부 존중', '재발송 차단 기간', '하루 발송 상한', '발송 간격',
+                '연습 모드', '야간 발송 허용', '테스트 수신 주소'];
+  const missing = want.filter(w => !txt.includes(w));
+  if (missing.length) throw new Error(`설정 화면에 없음: ${missing.join(', ')}`);
+  console.log(`      · 발송 관련 설정 ${want.length}개 모두 노출됨`);
 });
 
 await step('전체 보기', async () => {

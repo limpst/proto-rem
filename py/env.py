@@ -146,6 +146,34 @@ ENV_SPEC = [
                "본인 주소로 테스트할 때만 잠깐 1로 두고, 실제 캠페인 전에 반드시 되돌리세요.",
     },
     {
+        "key": "RESPECT_CONSENT", "group": "메일 발송", "label": "수신거부 존중", "type": "bool",
+        "secret": False, "placeholder": "1",
+        "what": "1이면 명함의 '수신 동의' 칸이 거부인 사람에게는 보내지 않습니다.",
+        "why": "광고성 정보는 사전 동의가 원칙입니다. 거부 의사를 적어 둔 사람에게 "
+               "발송되면 기록이 남아 있다는 점 때문에 더 무겁게 다뤄집니다. 켜 두세요.",
+    },
+    {
+        "key": "RESEND_BLOCK_DAYS", "group": "메일 발송", "label": "재발송 차단 기간(일)",
+        "secret": False, "placeholder": "30",
+        "what": "같은 사람에게 이 일수 안에는 다시 보내지 않습니다. 0이면 제한 없음.",
+        "why": "같은 내용을 반복해 받으면 스팸 신고로 이어지고, 한 번 상한 발신 도메인 "
+               "평판은 되돌리기 어렵습니다. 30일이 무난합니다.",
+    },
+    {
+        "key": "DAILY_SEND_LIMIT", "group": "메일 발송", "label": "하루 발송 상한(건)",
+        "secret": False, "placeholder": "100",
+        "what": "하루에 보낼 수 있는 최대 건수입니다. 0이면 제한 없음.",
+        "why": "Gmail 개인 계정은 하루 500통 안팎에서 계정이 잠깁니다. "
+               "잠기면 회사 메일 전체가 멈추므로 넉넉히 낮춰 두는 편이 낫습니다.",
+    },
+    {
+        "key": "SEND_INTERVAL_SEC", "group": "메일 발송", "label": "발송 간격(초)",
+        "secret": False, "placeholder": "2",
+        "what": "메일 한 통과 다음 통 사이에 쉬는 시간입니다.",
+        "why": "한꺼번에 쏟아내면 스팸 필터에 걸리기 쉽습니다. 사람이 보내는 속도에 "
+               "가깝게 두는 편이 도달률에 유리합니다.",
+    },
+    {
         "key": "LLM_BACKEND", "group": "AI", "label": "AI 백엔드",
         "secret": False, "placeholder": "claude-api",
         "what": "메일 문구를 쓰는 AI 를 무엇으로 할지 고릅니다. "

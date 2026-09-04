@@ -25,6 +25,7 @@ import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 
 from . import classify_ai, copy_ai, deliver, enrich, generate, llm, normalize, resolve
@@ -265,6 +266,17 @@ def _fill_sector_messages(job_id, rest, sel, channel, persona_id, mode="1:1"):
 
 
 # ── 라우트 ────────────────────────────────────────────────────────────
+
+def _sent_today(st: dict) -> int:
+    """오늘 실제로 나간 건수. 하루 상한을 재려면 기준이 필요하다."""
+    today = datetime.now().date().isoformat()
+    n = 0
+    for c in st.get("cards") or []:
+        d = c.get("deliveredAt")
+        if d and str(d)[:10] == today and c.get("status") == "SENT":
+            n += 1
+    return n
+
 def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
     """(status, payload) 를 돌려준다. payload 가 dict 면 JSON 으로 나간다."""
 
@@ -1394,21 +1406,29 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
 
         def work(job_id: str):
             sent_results = []
+            sent_today = _sent_today(store.load())
+            gap = deliver.send_interval_sec()
             for i, c0 in enumerate(approved):
                 _job_set(job_id, current=f"{c0.get('name')} · {c0.get('company')}", done=i)
-                if not c0.get("email"):
-                    # 주소는 지어낼 수 없다. 실패로 기록하면 이력이 빨갛게 뒤덮여
-                    # 진짜 실패(인증 오류 등)가 묻힌다. 건너뛴 것으로 남긴다.
-                    def skip(st2, cid=c0["id"]):
+
+                # 발송 전 점검 — 수신거부·재발송 간격·하루 상한·주소 없음.
+                # 막힌 건은 실패가 아니라 "건너뜀"으로 남긴다. 실패로 적으면
+                # 이력이 빨갛게 뒤덮여 진짜 실패(인증 오류 등)가 묻힌다.
+                stop = deliver.preflight(c0, sent_today)
+                if stop:
+                    def skip(st2, cid=c0["id"], why=stop):
                         t2 = _card(st2, cid)
                         if t2:
-                            t2["status"] = "NO_EMAIL"
-                            t2["deliverError"] = "수신 이메일 주소 없음 — 발송 이력에서 [수정]으로 넣으세요"
+                            t2["status"] = "BLOCKED" if "주소" not in why else "NO_EMAIL"
+                            t2["deliverError"] = why
                     store.update(skip)
-                    sent_results.append({"id": c0["id"], "to": "", "sent": False,
-                                         "note": "건너뜀 — 수신 주소 없음"})
+                    sent_results.append({"id": c0["id"], "to": c0.get("email") or "",
+                                         "sent": False, "note": f"건너뜀 — {stop}"})
                     _job_set(job_id, done=i + 1, results=sent_results)
                     continue
+
+                if i and gap:
+                    time.sleep(gap)   # 한꺼번에 쏟아내지 않는다
                 try:
                     r = deliver.send_email(c0.get("email"), c0["message"].get("subject"),
                                            c0["message"].get("body"))
@@ -1425,6 +1445,8 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
                     t2["deliverError"] = None if rr["ok"] else rr.get("error")
                     st2["step"] = 7
                 store.update(apply)
+                if r["ok"]:
+                    sent_today += 1
                 sent_results.append({"id": c0["id"], "to": c0.get("email"), "sent": r["ok"],
                                      "note": r.get("messageId") or r.get("error")})
                 _job_set(job_id, done=i + 1, results=sent_results)
