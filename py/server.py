@@ -157,9 +157,57 @@ def _job_run(jid: str, fn):
 # 두지 않아 재시작해도 로그인이 풀리지 않고, 비밀번호를 바꾸면 전부 로그아웃된다.
 COOKIE = "pr_session"
 
+#: 공개 배포인데 비밀번호가 비어 있을 때 대신 내보내는 화면.
+#: 빈 화면이나 500 을 주면 "고장났나?" 하고 넘어가게 된다. 무엇을 해야 하는지 적는다.
+LOCKDOWN_HTML = """<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SafeLead · 설정이 필요합니다</title><style>
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0d0f13;
+ color:#e8ebf0;font:15px/1.7 system-ui,-apple-system,"Malgun Gothic",sans-serif}
+.box{max-width:560px;padding:36px 40px;background:#171a21;border:1px solid #252a34;border-radius:14px}
+h1{margin:0 0 6px;font-size:19px}
+.sub{color:#8c94a3;font-size:13px;margin-bottom:22px}
+ol{margin:0;padding-left:20px}li{margin:9px 0}
+code{background:#0f1216;border:1px solid #2f3641;border-radius:5px;padding:2px 7px;font-size:13px}
+.why{margin-top:22px;padding-top:18px;border-top:1px solid #252a34;color:#8c94a3;font-size:13px}
+</style></head><body><div class="box">
+<h1>이 서버는 아직 잠겨 있지 않습니다</h1>
+<div class="sub">인터넷에 올라가 있는데 접속 비밀번호가 비어 있어, 화면을 열지 않았습니다.</div>
+<ol>
+<li>Render 대시보드에서 이 서비스를 엽니다</li>
+<li>왼쪽 <b>Environment</b> 를 누릅니다</li>
+<li><code>APP_PASSWORD</code> 에 비밀번호를 넣고 저장합니다</li>
+<li>아이디를 바꾸려면 <code>APP_USER</code> 도 넣습니다 (기본 <code>atom</code>)</li>
+</ol>
+<div class="why">이 화면에는 명함(개인정보)과 발송 설정, 저장된 API 키가 들어 있습니다.
+비밀번호가 없으면 주소를 아는 누구나 그것을 볼 수 있어, 여는 대신 막았습니다.
+내 PC(<code>localhost</code>)에서는 지금까지처럼 비밀번호 없이 열립니다.</div>
+</div></body></html>"""
+
 
 #: 아이디를 따로 정하지 않으면 이것을 쓴다.
 DEFAULT_USER = "atom"
+
+
+def _is_hosted() -> bool:
+    """인터넷에 올라가 있는가.
+
+    Render·Fly·Heroku 는 자기 이름의 환경변수를 심어 준다. 이걸로 "지금 이
+    프로세스가 공개된 주소에서 돌고 있다" 를 안다.
+    """
+    return any(k in os.environ for k in
+               ("RENDER", "RENDER_SERVICE_ID", "FLY_APP_NAME", "DYNO", "K_SERVICE"))
+
+
+def _auth_needed() -> bool:
+    """공개 배포인데 비밀번호가 비어 있는 상태.
+
+    지금까지는 이 경우 그냥 열렸다. 명함(개인정보)과 발송 설정, 저장된 API 키가
+    주소만 알면 누구나 보이는 상태로 인터넷에 떠 있었다. 잠그는 것을 잊었다는
+    사실 자체가 화면에 드러나지 않았던 게 문제였다.
+    이제는 열지 않고, 무엇을 해야 하는지 화면에 적어 둔다.
+    """
+    return _is_hosted() and not env("APP_PASSWORD")
 
 
 def _auth_on() -> bool:
@@ -1509,6 +1557,18 @@ class Handler(BaseHTTPRequestHandler):
                     body = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
                 except ValueError as e:
                     return self._send(400, {"error": f"요청 본문을 해석하지 못했습니다: {e}"})
+
+        # --- 잠그는 것을 잊은 공개 배포는 열지 않는다 ---------------------
+        # "설정을 안 했으니 무인증" 은 내 PC 에서만 맞는 말이다. 인터넷에서는
+        # 그게 곧 개인정보 공개다. 열어 주는 대신 무엇을 해야 하는지 보여 준다.
+        if _auth_needed():
+            if path.startswith("/api/"):
+                return self._send(503, {
+                    "error": "이 서버는 아직 잠겨 있지 않아 열 수 없습니다.",
+                    "fix": "Render 대시보드 → Environment 에서 APP_PASSWORD 를 넣고 저장하세요.",
+                })
+            return self._send(503, LOCKDOWN_HTML.encode("utf-8"),
+                              ctype="text/html; charset=utf-8")
 
         # --- 접속 인증 게이트 -------------------------------------------
         if _auth_on() and not _authed(self.headers.get("cookie", "")):
