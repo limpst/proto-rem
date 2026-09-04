@@ -31,6 +31,10 @@
     background:#141d38;border:1px solid #2c3f6e;color:#a9c2ff;
   }
   .hint b{color:#dbe6ff}
+  .dev{margin-top:14px;padding:11px 13px;border-radius:8px;font-size:12.5px;line-height:1.65;
+       background:#141b17;border:1px solid #2b4436;color:#9fd3b4}
+  .dev.warn{background:#1e1416;border-color:#4a2a30;color:#f0a9b4}
+  .dev code{background:rgba(255,255,255,.07);border-radius:4px;padding:1px 5px}
 </style>
 </head>
 <body>
@@ -48,6 +52,7 @@
     <button id="go" type="submit">들어가기</button>
     <div class="err" id="err"></div>
     <div class="hint" id="hint" hidden></div>
+    <div class="dev" id="dev" hidden></div>
   </form>
 <script>
   const f = document.getElementById('f');
@@ -63,6 +68,27 @@
       hintBox.hidden = false;
     }
     if (j && j.user && !uid.value) uid.placeholder = j.user;
+
+    // 개발용 자동 입력. DEV_AUTOFILL=1 일 때만 서버가 prefill 을 실어 보낸다.
+    // 비밀번호 칸은 type=password 라 화면에는 ●●●● 로만 보인다.
+    if (j && j.prefill) {
+      uid.value = j.prefill.user || '';
+      pw.value = j.prefill.password || '';
+      go.focus();
+      const dev = document.getElementById('dev');
+      dev.hidden = false;
+      // 인터넷에 올라간 주소에서 켜져 있으면, 잠금이 사실상 없다는 걸 숨기지 않는다.
+      if (j.exposed) {
+        dev.className = 'dev warn';
+        dev.innerHTML = '<b>⚠ 이 주소는 인터넷에 공개돼 있습니다</b><br>'
+          + '자동 입력이 켜져 있어, 이 화면을 연 사람은 누구나 버튼 한 번으로 들어옵니다. '
+          + '잠금이 없는 것과 같습니다. 관리자 설정에서 <code>DEV_AUTOFILL</code> 을 끄세요.';
+      } else {
+        // 내 PC 에서는 곧장 들어간다. 여기서 한 번 더 누르게 할 이유가 없다.
+        dev.innerHTML = '<b>개발용 자동 입력</b> · 바로 들어갑니다…';
+        setTimeout(() => f.requestSubmit(), 150);
+      }
+    }
   }).catch(() => { /* 힌트는 부수적이다. 못 받아도 로그인은 된다 */ });
   const go = document.getElementById('go');
   const err = document.getElementById('err');

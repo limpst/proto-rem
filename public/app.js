@@ -2642,7 +2642,16 @@ async function runJob(startPath, startBody, label) {
   try {
   for (let i = 0; i < 6000; i++) {                    // 최대 약 3시간
     await new Promise(r => setTimeout(r, 1500));
-    const j = await (await fetch(`/api/job?id=${encodeURIComponent(start.jobId)}`)).json();
+    const res = await fetch(`/api/job?id=${encodeURIComponent(start.jobId)}`);
+    const j = await res.json();
+    // 서버가 다시 뜨면 진행 중이던 작업 번호가 사라진다(작업 목록은 메모리에만 있다).
+    // 여기서 그냥 멈추면, 이미 DB 에 저장된 결과까지 못 본 채 "실패" 로 끝난다.
+    // 상태를 다시 읽어 화면을 맞추고, 성공·실패 판정은 각 단계가 데이터로 하게 둔다.
+    if (j.restarted || res.status === 410) {
+      LOG.push('warn', '작업', `${label} — 서버가 재시작되어 진행 상황을 잃었습니다. 저장된 결과로 이어갑니다.`);
+      adopt(j);
+      return j;
+    }
     if (j.error) throw new Error(j.error);
     if (j.status === 'failed') throw new Error(j.error || '작업이 실패했습니다.');
     const done = j.done ?? 0;

@@ -39,7 +39,7 @@ from . import log as L
 from .domain import COMPANY, PERSONAS, SEGMENTS, classify
 from .domain import persona as persona_of
 from .domain import segment as seg_of
-from .env import env, settings_view, write_env
+from .env import env, env_bool, settings_view, write_env
 
 ROOT = Path(__file__).resolve().parent.parent
 PUBLIC = ROOT / "public"
@@ -75,6 +75,10 @@ STEPS = [
 # ─────────────────────────────────────────────────────────────────────
 _JOBS: dict[str, dict] = {}
 _JOB_LOCK = threading.Lock()
+
+#: 이 프로세스가 언제 떴는지. 작업 번호에 만들어진 시각이 박혀 있어서,
+#: 이보다 앞선 번호를 물어보면 "재시작으로 잃은 작업" 이라고 말해 줄 수 있다.
+_BOOT_AT = time.time()
 
 
 def _job_new(kind: str, total: int) -> str:
@@ -1370,6 +1374,19 @@ def route(path: str, method: str, body: dict, query: dict, peer: str = ""):
         jid = (query.get("id") or [""])[0]
         j = _job_get(jid)
         if not j:
+            # 작업 목록은 메모리에만 있다. 서버가 다시 뜨면 통째로 사라진다.
+            # 그때 "그런 작업이 없습니다" 라고만 하면, 사람은 자기가 뭘 잘못
+            # 눌렀나 생각하게 된다. 실제로는 배포·재시작 때문이고, 그 사이
+            # 이미 저장된 결과는 DB 에 남아 있다. 사실대로 말하고 상태를 함께 준다.
+            ts = 0.0
+            tail = jid.rsplit("-", 1)[-1]
+            if tail.isdigit():
+                ts = int(tail) / 1000.0
+            if ts and ts < _BOOT_AT:
+                return 410, {**full_state(store.load()),
+                             "error": "서버가 다시 시작되어 진행 상황을 잃었습니다. "
+                                      "이미 저장된 결과는 그대로 있습니다.",
+                             "restarted": True}
             return 404, {"error": "그런 작업이 없습니다."}
         if j["status"] in ("done", "failed"):
             # 상태를 먼저 펼치고 작업 정보를 덮어써야 failed/errors 가 살아남는다.
@@ -1576,7 +1593,15 @@ class Handler(BaseHTTPRequestHandler):
             # 로그인 화면이 힌트를 읽어야 하므로 이것만 인증 전에 연다.
             # 비밀값은 담지 않는다 — 관리자가 힌트에 적어 넣은 문구만 그대로 돌려준다.
             if path == "/api/login-info" and method == "GET":
-                return self._send(200, {"user": _auth_user(), "hint": env("APP_HINT") or ""})
+                info = {"user": _auth_user(), "hint": env("APP_HINT") or ""}
+                # 개발용 자동 입력. 켜져 있을 때만 비밀번호를 실어 보낸다.
+                # 켜는 순간 "화면을 연 사람 = 들어올 수 있는 사람" 이 되므로,
+                # 인터넷에 올라간 서버에서 켰다면 그 사실을 화면에 크게 알린다.
+                if env_bool("DEV_AUTOFILL"):
+                    info["prefill"] = {"user": _auth_user(),
+                                       "password": env("APP_PASSWORD") or ""}
+                    info["exposed"] = _is_hosted()
+                return self._send(200, info)
             if path == "/api/login" and method == "POST":
                 ok_id = hmac.compare_digest(str(body.get("user") or "").strip(), _auth_user())
                 ok_pw = hmac.compare_digest(str(body.get("password") or ""), env("APP_PASSWORD") or "")
