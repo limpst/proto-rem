@@ -286,9 +286,22 @@ def settings_view(reveal: bool = False) -> list[dict]:
         raw = cur.get(k, "")
         in_os = k in os.environ
         boot = k in BOOT_KEYS
+
+        # .env 가 비어 있어도 환경변수가 값을 대고 있으면 그 값을 보여 준다.
+        #
+        # 배포 서버(Render 등)에서는 설정이 전부 환경변수로 들어온다. 파일만
+        # 읽으면 화면의 모든 칸이 빈칸으로 보인다 — 실제로는 DRY_RUN=1 로
+        # 돌고 있는데 화면은 아무 말도 못 하는 상태가 된다. "설정됨" 배지만
+        # 있고 값이 안 보이면, 실전 발송이 켜져 있는지 꺼져 있는지 화면을
+        # 봐서는 알 수 없다. 그건 알아야 하는 값이다.
+        shown = raw or (os.environ.get(k, "") if in_os else "")
+        # 비밀값은 어디서 왔든 가린다. reveal=True(내 PC에서 [비밀값 보기])일 때만 원문.
+        if shown and spec.get("secret") and not reveal:
+            shown = _MASK
+
         items.append({
             **spec,
-            "value": (_MASK if (raw and spec.get("secret") and not reveal) else raw),
+            "value": shown,
             "set": bool(raw or (in_os and not boot)),
             "fromOsEnv": in_os,
             # 부팅 파라미터는 지금 돌고 있는 서버에는 반영되지 않는다.
