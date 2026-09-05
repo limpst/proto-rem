@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import http.cookiejar
 import json
 import os
 import sys
@@ -36,17 +37,45 @@ Hwayoung Lee Quantitative Researcher MEISTER TRADING hwayoung.lee80@gmail.com
 ok_count, fail_count = 0, 0
 
 
+#: 로그인이 켜져 있으면 세션 쿠키를 들고 다녀야 한다.
+_JAR = http.cookiejar.CookieJar()
+_OPEN = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_JAR)).open
+
+
 def call(path: str, body: dict | None = None, timeout: int = 600):
     data = json.dumps(body or {}, ensure_ascii=False).encode("utf-8") if body is not None else None
     req = urllib.request.Request(f"{BASE}{path}", data=data,
                                  headers={"content-type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _OPEN(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        return {"error": f"HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}"}
+        raw = e.read().decode("utf-8", "replace")
+        try:
+            j = json.loads(raw)
+            j["error"] = f"HTTP {e.code}: {j.get('error') or raw[:200]}"
+            j["status"] = e.code
+            return j
+        except ValueError:
+            return {"error": f"HTTP {e.code}: {raw[:300]}", "status": e.code}
     except Exception as e:
         return {"error": str(e)}
+
+
+def login() -> dict:
+    """로그인이 켜져 있으면 들어간다.
+
+    켜져 있지 않으면 아무 일도 하지 않는다. 자격증명은 실행 환경에서 받는다
+    (SMOKE_USER / SMOKE_PASSWORD, 없으면 서버와 같은 .env 의 APP_USER/APP_PASSWORD).
+    점검 도구가 비밀번호를 코드에 박아 두면 그게 곧 유출 경로가 된다.
+    """
+    from .env import env
+    user = os.environ.get("SMOKE_USER") or env("APP_USER") or "atom"
+    pw = os.environ.get("SMOKE_PASSWORD") or env("APP_PASSWORD") or ""
+    if not pw:
+        return {"skipped": True}
+    r = call("/api/login", {"user": user, "password": pw}, timeout=30)
+    return r
 
 
 def wait_job(r: dict, label: str = "", timeout: int = 1800) -> dict:
@@ -135,6 +164,20 @@ def main():
 
     print(f"대상 서버: {BASE}")
     st = call("/api/state")
+    if st.get("status") == 401 or st.get("login"):
+        # 서버는 켜져 있는데 잠겨 있는 것이다. 예전에는 "서버를 띄우세요" 라고
+        # 안내해서, 이미 켜 둔 사람이 원인을 못 찾았다.
+        r = login()
+        if r.get("skipped"):
+            print("이 서버는 로그인이 켜져 있는데 비밀번호를 찾지 못했습니다.\n"
+                  "SMOKE_USER / SMOKE_PASSWORD 를 지정하거나, 같은 컴퓨터의 .env 를 읽을 수 있게 실행하세요.")
+            sys.exit(2)
+        if r.get("error"):
+            print(f"로그인하지 못했습니다: {r['error']}\n"
+                  "SMOKE_USER / SMOKE_PASSWORD 가 서버 설정과 같은지 확인하세요.")
+            sys.exit(2)
+        print("로그인됨 (이 서버는 잠겨 있습니다)")
+        st = call("/api/state")
     if st.get("error"):
         print(f"서버에 연결하지 못했습니다: {st['error']}\n먼저 `python -m py.server` 를 띄우세요.")
         sys.exit(2)
@@ -201,8 +244,11 @@ def main():
         for g in kw["groups"]:
             picks += g["items"][:2]
         picks = picks[:6]
-        r = call("/api/copy-suggest", {"keywords": picks, "tones": ["urgent", "benefit"],
-                                       "count": 18, "segmentId": kw["target"]["segmentId"]})
+        # 문구 추천도 서버가 작업으로 돌린다(AI 호출에 20~30초). 끝날 때까지 기다린다.
+        r = wait_job(call("/api/copy-suggest", {"keywords": picks, "tones": ["urgent", "benefit"],
+                                                "count": 18, "segmentId": kw["target"]["segmentId"]}),
+                     "문구 추천")
+        assert not r.get("error"), r.get("error")
         items = (r.get("copy") or {}).get("items") or []
         assert len(items) >= 6, f"문구가 {len(items)}개만 나왔습니다"
         texts = [i["text"] for i in items[:5]]
