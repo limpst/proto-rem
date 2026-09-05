@@ -222,6 +222,16 @@ def _auth_user() -> str:
     return (env("APP_USER") or DEFAULT_USER).strip()
 
 
+def _eq(a: str | None, b: str | None) -> bool:
+    """상수 시간 비교. 반드시 바이트로 넘긴다.
+
+    hmac.compare_digest 는 str 을 받으면 ASCII 만 허용하고, 한글이 섞이면
+    TypeError 를 던진다. 그대로 두면 한글 비밀번호는 로그인 자체가 불가능하고,
+    사용자가 한글을 잘못 입력하기만 해도 401 이 아니라 500 이 난다.
+    """
+    return hmac.compare_digest(str(a or "").encode("utf-8"), str(b or "").encode("utf-8"))
+
+
 def _token() -> str:
     # 아이디까지 섞는다. 아이디를 바꾸면 기존 세션도 끊긴다.
     key = ((_auth_user() + "\x00" + (env("APP_PASSWORD") or "")).encode())
@@ -232,7 +242,7 @@ def _authed(cookie_header: str) -> bool:
     for part in (cookie_header or "").split(";"):
         k, _, v = part.strip().partition("=")
         if k == COOKIE:
-            return hmac.compare_digest(v.strip(), _token())
+            return _eq(v.strip(), _token())
     return False
 
 
@@ -1603,8 +1613,8 @@ class Handler(BaseHTTPRequestHandler):
                     info["exposed"] = _is_hosted()
                 return self._send(200, info)
             if path == "/api/login" and method == "POST":
-                ok_id = hmac.compare_digest(str(body.get("user") or "").strip(), _auth_user())
-                ok_pw = hmac.compare_digest(str(body.get("password") or ""), env("APP_PASSWORD") or "")
+                ok_id = _eq(str(body.get("user") or "").strip(), _auth_user())
+                ok_pw = _eq(body.get("password"), env("APP_PASSWORD"))
                 if ok_id and ok_pw:
                     L.log("ok", "auth", f"로그인 — {self.client_address[0]}")
                     return self._send(200, {"ok": True}, headers={
